@@ -141,8 +141,7 @@ metadata:
   name: deployment-policy
 spec:
   for:
-    apiGroup: apps
-    apiVersion: v1
+    apiVersion: apps/v1
     kind: Deployment
 
   subjects:
@@ -158,8 +157,7 @@ spec:
     when: "!has(object.status.observedGeneration)"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: replicasets
       relation: ControllerChild
       verbs: [Create]
@@ -171,8 +169,7 @@ spec:
   deleting:
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: replicasets
       relation: ControllerChild
       verbs: ["*"]
@@ -182,8 +179,7 @@ spec:
   - trigger: "spec.replicas"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: replicasets
       relation: ControllerChild
       verbs: [Update, Delete]
@@ -200,8 +196,7 @@ spec:
     - "metadata.annotations[approved-by]"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: replicasets
       relation: ControllerChild
       verbs: [Update]
@@ -227,8 +222,7 @@ metadata:
   name: deployment-policy-simple
 spec:
   for:
-    apiGroup: apps
-    apiVersion: v1
+    apiVersion: apps/v1
     kind: Deployment
 
   subjects:
@@ -240,8 +234,7 @@ spec:
   initializing:
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: replicasets
       relation: ControllerChild
       verbs: [Create]
@@ -249,8 +242,7 @@ spec:
   deleting:
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: replicasets
       relation: ControllerChild
       verbs: ["*"]
@@ -259,8 +251,7 @@ spec:
   - trigger: "spec"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: replicasets
       relation: ControllerChild
       verbs: ["*"]
@@ -275,12 +266,11 @@ The effect: replicasets are bounded (tracked) but can be freely mutated when the
 
 ### for
 
-The object kind this policy applies to, fully qualified:
+The object kind this policy applies to (follows ObjectReference pattern):
 
 | Field | Description |
 |-------|-------------|
-| `apiGroup` | API group (e.g., `apps`, `crossplane.io`) |
-| `apiVersion` | API version (e.g., `v1`, `v1alpha1`) |
+| `apiVersion` | API version including group (e.g., `apps/v1`, `crossplane.io/v1alpha1`) |
 | `kind` | Object kind (singular, CamelCase, e.g., `Deployment`, `ReplicaSet`) |
 
 ### subjects
@@ -355,13 +345,20 @@ Each entry in `policies` defines an upper bound for a specific target GVR:
 - GVRs not mentioned in any policy entry are **unrestricted**
 - `policies: []` (empty) means nothing is restricted → everything unrestricted
 
-**`target` is required.** Without a target, a policy entry doesn't restrict anything. The `target` uses `resource` (plural, lowercase) because it describes admission on API resources:
+**`target` is required.** Without a target, a policy entry doesn't restrict anything.
+
+For `ControllerChild`, target follows ObjectReference pattern with `resource` instead of `kind`:
 
 | Field | Description |
 |-------|-------------|
-| `apiGroup` | API group (e.g., `apps`, `crossplane.io`) |
-| `apiVersion` | API version (e.g., `v1`, `v1alpha1`) |
+| `apiVersion` | API version including group (e.g., `apps/v1`, `crossplane.io/v1alpha1`) |
 | `resource` | Resource name (plural, lowercase, e.g., `deployments`, `replicasets`) |
+
+For `External`, target uses a free-form map:
+
+| Field | Description |
+|-------|-------------|
+| `external` | `map[string]string` — provider-specific identifier |
 
 ### verbs (object-level)
 
@@ -395,16 +392,20 @@ If `mutations` is omitted and `verbs` includes `Update`, all field mutations are
 Only for `relation: External`. Free-form `map[string]string` to identify the external resource type. Provider-specific, Kausality doesn't interpret it.
 
 ```yaml
-# Crossplane
-target:
-  external:
-    provider: provider-aws
-    kind: RDSInstance
+# Crossplane provider
+- target:
+    external:
+      provider: provider-aws
+      kind: RDSInstance
+  relation: External
+  verbs: [Update]
 
-# Terraform
-target:
-  external:
-    resource: aws_rds_cluster
+# Terraform resource
+- target:
+    external:
+      resource: aws_rds_cluster
+  relation: External
+  verbs: [apply]
 ```
 
 ## Admission Flow
@@ -516,8 +517,7 @@ spec:
   serviceAccount: system:serviceaccount:crossplane-system:crossplane
   policies:
   - target:
-      apiGroup: rds.aws.crossplane.io
-      apiVersion: v1alpha1
+      apiVersion: rds.aws.crossplane.io/v1alpha1
       resource: rdsinstances
     relation: ControllerChild
     mutations: ["spec.forProvider"]
@@ -597,8 +597,7 @@ For non-KRM resources, use `relation: External`:
 policies:
 # KRM mutations (what the controller may change on child MRs)
 - target:
-    apiGroup: rds.aws.crossplane.io
-    apiVersion: v1alpha1
+    apiVersion: rds.aws.crossplane.io/v1alpha1
     resource: rdsinstances
   relation: ControllerChild
   mutations:
@@ -749,8 +748,7 @@ metadata:
   name: database-claim-policy
 spec:
   for:
-    apiGroup: example.com
-    apiVersion: v1alpha1
+    apiVersion: example.com/v1alpha1
     kind: DatabaseClaim
 
   subjects:
@@ -762,8 +760,7 @@ spec:
     when: "!has(object.status.observedGeneration)"
     policies:
     - target:
-        apiGroup: example.com
-        apiVersion: v1alpha1
+        apiVersion: example.com/v1alpha1
         resource: xdatabases
       relation: ControllerChild
       verbs: [Create]
@@ -774,8 +771,7 @@ spec:
   deleting:
     policies:
     - target:
-        apiGroup: example.com
-        apiVersion: v1alpha1
+        apiVersion: example.com/v1alpha1
         resource: xdatabases
       relation: ControllerChild
       verbs: ["*"]
@@ -793,8 +789,7 @@ spec:
     - "metadata.annotations[jira]"
     policies:
     - target:
-        apiGroup: example.com
-        apiVersion: v1alpha1
+        apiVersion: example.com/v1alpha1
         resource: xdatabases
       relation: ControllerChild
       verbs: [Update]
@@ -809,8 +804,7 @@ spec:
     - "metadata.annotations[jira]"
     policies:
     - target:
-        apiGroup: example.com
-        apiVersion: v1alpha1
+        apiVersion: example.com/v1alpha1
         resource: xdatabases
       relation: ControllerChild
       verbs: [Update]
@@ -824,8 +818,7 @@ metadata:
   name: xdatabase-policy
 spec:
   for:
-    apiGroup: example.com
-    apiVersion: v1alpha1
+    apiVersion: example.com/v1alpha1
     kind: XDatabase
 
   subjects:
@@ -837,8 +830,7 @@ spec:
     when: "!has(object.status.observedGeneration)"
     policies:
     - target:
-        apiGroup: rds.aws.crossplane.io
-        apiVersion: v1alpha1
+        apiVersion: rds.aws.crossplane.io/v1alpha1
         resource: rdsinstances
       relation: ControllerChild
       verbs: [Create]
@@ -854,8 +846,7 @@ spec:
   deleting:
     policies:
     - target:
-        apiGroup: rds.aws.crossplane.io
-        apiVersion: v1alpha1
+        apiVersion: rds.aws.crossplane.io/v1alpha1
         resource: rdsinstances
       relation: ControllerChild
       verbs: ["*"]
@@ -869,8 +860,7 @@ spec:
   - trigger: "spec.size"
     policies:
     - target:
-        apiGroup: rds.aws.crossplane.io
-        apiVersion: v1alpha1
+        apiVersion: rds.aws.crossplane.io/v1alpha1
         resource: rdsinstances
       relation: ControllerChild
       verbs: [Update]
@@ -889,8 +879,7 @@ spec:
     - "object.metadata.annotations['allow-recreate'] == 'true'"
     policies:
     - target:
-        apiGroup: rds.aws.crossplane.io
-        apiVersion: v1alpha1
+        apiVersion: rds.aws.crossplane.io/v1alpha1
         resource: rdsinstances
       relation: ControllerChild
       verbs: [Update]
@@ -973,8 +962,7 @@ metadata:
     kausality.io/derived-from: webapp  # source RGD
 spec:
   for:
-    apiGroup: example.com
-    apiVersion: v1alpha1
+    apiVersion: example.com/v1alpha1
     kind: WebApp
 
   subjects:
@@ -986,8 +974,7 @@ spec:
     when: "!has(object.status.observedGeneration)"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: deployments
       relation: ControllerChild
       verbs: [Create]
@@ -995,7 +982,6 @@ spec:
       - jsonPath: "*"
         verbs: [Insert, Mutate]
     - target:
-        apiGroup: ""
         apiVersion: v1
         resource: services
       relation: ControllerChild
@@ -1008,8 +994,7 @@ spec:
   - trigger: "spec.name"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: deployments
       relation: ControllerChild
       verbs: [Update]
@@ -1017,7 +1002,6 @@ spec:
       - jsonPath: "metadata.name"
         verbs: [Mutate]
     - target:
-        apiGroup: ""
         apiVersion: v1
         resource: services
       relation: ControllerChild
@@ -1029,8 +1013,7 @@ spec:
   - trigger: "spec.replicas"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: deployments
       relation: ControllerChild
       verbs: [Update]
@@ -1041,8 +1024,7 @@ spec:
   - trigger: "spec.image"
     policies:
     - target:
-        apiGroup: apps
-        apiVersion: v1
+        apiVersion: apps/v1
         resource: deployments
       relation: ControllerChild
       verbs: [Update]
