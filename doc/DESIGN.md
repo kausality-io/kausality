@@ -103,21 +103,22 @@ metadata:
             "metadata.annotations[approved-by]": "alice@example.com"
 ```
 
-The AllowancePolicy specifies which fields to capture via `capture`:
+The AllowancePolicy specifies which fields to capture via `capture` in each rule:
 
 ```yaml
 spec:
-  match:
-    kind: Deployment
-    fields: ["spec.replicas"]
-    cel:
+  rules:
+  - trigger: "spec.replicas"
+    conditions:
     - "has(object.metadata.annotations['jira'])"
     capture:                                         # fields to store in trace
     - "metadata.annotations[jira]"
     - "metadata.annotations[approved-by]"
+    allow:
+    - ...
 ```
 
-- `cel` validates the field exists or matches a pattern
+- `conditions` validates the field exists or matches a pattern
 - `capture` stores the actual value in the trace
 
 The trace becomes self-documenting — auditable without looking up external systems.
