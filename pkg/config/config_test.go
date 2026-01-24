@@ -602,6 +602,155 @@ func TestOverrideMatchesContext_ObjectSelector(t *testing.T) {
 	}
 }
 
+func TestResolveModeWithAnnotations(t *testing.T) {
+	cfg := &Config{
+		DriftDetection: DriftDetectionConfig{
+			DefaultMode: ModeLog,
+			Overrides: []DriftDetectionOverride{
+				{
+					APIGroups:  []string{"apps"},
+					Resources:  []string{"deployments"},
+					Namespaces: []string{"enforce-ns"},
+					Mode:       ModeEnforce,
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name          string
+		objectAnns    map[string]string
+		namespaceAnns map[string]string
+		ctx           ResourceContext
+		wantMode      string
+	}{
+		{
+			name:          "object annotation enforce takes precedence",
+			objectAnns:    map[string]string{ModeAnnotation: ModeEnforce},
+			namespaceAnns: map[string]string{ModeAnnotation: ModeLog},
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "default",
+			},
+			wantMode: ModeEnforce,
+		},
+		{
+			name:          "object annotation log overrides namespace enforce",
+			objectAnns:    map[string]string{ModeAnnotation: ModeLog},
+			namespaceAnns: map[string]string{ModeAnnotation: ModeEnforce},
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "default",
+			},
+			wantMode: ModeLog,
+		},
+		{
+			name:          "namespace annotation takes precedence over config",
+			objectAnns:    map[string]string{},
+			namespaceAnns: map[string]string{ModeAnnotation: ModeEnforce},
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "default",
+			},
+			wantMode: ModeEnforce,
+		},
+		{
+			name:          "falls back to config override",
+			objectAnns:    map[string]string{},
+			namespaceAnns: map[string]string{},
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "enforce-ns",
+			},
+			wantMode: ModeEnforce,
+		},
+		{
+			name:          "falls back to config default",
+			objectAnns:    map[string]string{},
+			namespaceAnns: map[string]string{},
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "default",
+			},
+			wantMode: ModeLog,
+		},
+		{
+			name:          "invalid object annotation ignored",
+			objectAnns:    map[string]string{ModeAnnotation: "invalid"},
+			namespaceAnns: map[string]string{ModeAnnotation: ModeEnforce},
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "default",
+			},
+			wantMode: ModeEnforce,
+		},
+		{
+			name:          "invalid namespace annotation ignored",
+			objectAnns:    map[string]string{},
+			namespaceAnns: map[string]string{ModeAnnotation: "invalid"},
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "default",
+			},
+			wantMode: ModeLog,
+		},
+		{
+			name:          "nil annotations handled",
+			objectAnns:    nil,
+			namespaceAnns: nil,
+			ctx: ResourceContext{
+				GVK:       schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+				Namespace: "default",
+			},
+			wantMode: ModeLog,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mode := cfg.ResolveModeWithAnnotations(tt.objectAnns, tt.namespaceAnns, tt.ctx)
+			assert.Equal(t, tt.wantMode, mode)
+		})
+	}
+}
+
+func TestIsEnforceModeWithAnnotations(t *testing.T) {
+	cfg := Default()
+
+	tests := []struct {
+		name          string
+		objectAnns    map[string]string
+		namespaceAnns map[string]string
+		want          bool
+	}{
+		{
+			name:          "enforce from object annotation",
+			objectAnns:    map[string]string{ModeAnnotation: ModeEnforce},
+			namespaceAnns: map[string]string{},
+			want:          true,
+		},
+		{
+			name:          "enforce from namespace annotation",
+			objectAnns:    map[string]string{},
+			namespaceAnns: map[string]string{ModeAnnotation: ModeEnforce},
+			want:          true,
+		},
+		{
+			name:          "log from default",
+			objectAnns:    map[string]string{},
+			namespaceAnns: map[string]string{},
+			want:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cfg.IsEnforceModeWithAnnotations(tt.objectAnns, tt.namespaceAnns, ResourceContext{})
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestGetModeForResourceContext(t *testing.T) {
 	cfg := &Config{
 		DriftDetection: DriftDetectionConfig{

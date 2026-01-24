@@ -178,42 +178,45 @@ excludeNamespaces:
 
 ### Drift Detection Mode
 
-Configure whether drift is logged only or enforced (requests blocked):
+Configure whether drift is logged only or enforced (requests blocked).
+
+#### Global Default (Helm)
+
+Set the global default mode in values.yaml:
 
 ```yaml
 driftDetection:
   # Default mode for all resources: "log" or "enforce"
   defaultMode: log
-
-  # Per-resource overrides
-  overrides:
-    # Enforce mode for apps/deployments
-    - apiGroups: ["apps"]
-      resources: ["deployments"]
-      mode: enforce
-
-    # Enforce only in specific namespaces
-    - apiGroups: ["apps"]
-      resources: ["replicasets"]
-      namespaces: ["production", "staging"]
-      mode: enforce
-
-    # Enforce in namespaces with specific labels
-    - apiGroups: ["apps"]
-      resources: ["*"]
-      namespaceSelector:
-        matchLabels:
-          critical: "true"
-      mode: enforce
-
-    # Enforce for objects with specific labels
-    - apiGroups: [""]
-      resources: ["configmaps"]
-      objectSelector:
-        matchLabels:
-          protected: "true"
-      mode: enforce
 ```
+
+#### Runtime Configuration (Annotations)
+
+Override the mode at runtime using the `kausality.io/mode` annotation on namespaces or objects:
+
+```yaml
+# Enforce mode for an entire namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  annotations:
+    kausality.io/mode: "enforce"
+---
+# Log mode override for a specific object
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: experimental
+  namespace: production
+  annotations:
+    kausality.io/mode: "log"  # Override namespace's enforce mode
+```
+
+**Precedence (most specific wins):**
+1. Object annotation `kausality.io/mode`
+2. Namespace annotation `kausality.io/mode`
+3. Global default from Helm values (`defaultMode`)
 
 | Mode | Behavior |
 |------|----------|

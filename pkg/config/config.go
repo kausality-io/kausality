@@ -71,6 +71,9 @@ const (
 	ModeEnforce = "enforce"
 )
 
+// ModeAnnotation is the annotation key for runtime mode configuration.
+const ModeAnnotation = "kausality.io/mode"
+
 // Load reads configuration from a YAML file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -144,6 +147,32 @@ func (c *Config) IsEnforceMode(gvk schema.GroupVersionKind) bool {
 // IsEnforceModeContext returns true if the given resource context should be in enforce mode.
 func (c *Config) IsEnforceModeContext(ctx ResourceContext) bool {
 	return c.GetModeForResourceContext(ctx) == ModeEnforce
+}
+
+// ResolveModeWithAnnotations resolves the enforcement mode using annotations and config.
+// Precedence (most specific wins):
+// 1. Object annotation kausality.io/mode
+// 2. Namespace annotation kausality.io/mode
+// 3. Config-based mode (overrides + default)
+func (c *Config) ResolveModeWithAnnotations(objectAnnotations, namespaceAnnotations map[string]string, ctx ResourceContext) string {
+	// Check object annotation first
+	if mode := objectAnnotations[ModeAnnotation]; isValidMode(mode) {
+		return mode
+	}
+
+	// Check namespace annotation second
+	if mode := namespaceAnnotations[ModeAnnotation]; isValidMode(mode) {
+		return mode
+	}
+
+	// Fall back to config-based resolution
+	return c.GetModeForResourceContext(ctx)
+}
+
+// IsEnforceModeWithAnnotations returns true if enforcement mode should be used.
+// Uses annotation-based resolution with config fallback.
+func (c *Config) IsEnforceModeWithAnnotations(objectAnnotations, namespaceAnnotations map[string]string, ctx ResourceContext) bool {
+	return c.ResolveModeWithAnnotations(objectAnnotations, namespaceAnnotations, ctx) == ModeEnforce
 }
 
 // Matches returns true if this override applies to the given GVK.

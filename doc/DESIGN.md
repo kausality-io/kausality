@@ -163,6 +163,53 @@ An approval is valid when:
 | Approval used (`mode: once`) | That specific approval is removed |
 | `mode: always` | Never pruned automatically (explicit removal required) |
 
+### Enforcement Mode
+
+The `kausality.io/mode` annotation controls whether drift is logged or enforced:
+
+```yaml
+metadata:
+  annotations:
+    kausality.io/mode: "enforce"  # or "log"
+```
+
+| Value | Behavior |
+|-------|----------|
+| `log` | Drift is detected and logged, warnings returned, but mutations are allowed |
+| `enforce` | Drift without approval is denied with an error message |
+
+**Precedence (most specific wins):**
+1. Object annotation `kausality.io/mode` on the child being mutated
+2. Namespace annotation `kausality.io/mode` on the child's namespace
+3. Global default from webhook configuration (`--default-mode` flag / Helm `defaultMode`)
+
+**Example: Enforce mode on a namespace**
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  annotations:
+    kausality.io/mode: "enforce"
+```
+
+All drift in the `production` namespace will be blocked unless approved.
+
+**Example: Log mode override on specific object**
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: experimental
+  namespace: production
+  annotations:
+    kausality.io/mode: "log"  # Override namespace's enforce mode
+```
+
+This deployment allows drift (with warnings) even though the namespace has enforce mode.
+
 ### Freeze and Snooze
 
 Additional parent annotations for operational control:

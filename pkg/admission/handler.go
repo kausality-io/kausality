@@ -136,20 +136,30 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		ObjectLabels: obj.GetLabels(),
 	}
 
-	// Fetch namespace labels if needed for selector matching
+	// Fetch namespace metadata if needed for selector matching and annotation resolution
+	var nsAnnotations map[string]string
 	if obj.GetNamespace() != "" {
-		nsLabels, err := h.getNamespaceLabels(ctx, obj.GetNamespace())
+		nsLabels, nsAnns, err := h.getNamespaceMetadata(ctx, obj.GetNamespace())
 		if err != nil {
-			log.V(1).Info("failed to get namespace labels", "error", err)
-			// Continue without namespace labels - selectors won't match
+			log.V(1).Info("failed to get namespace metadata", "error", err)
+			// Continue without namespace metadata - selectors won't match
 		} else {
 			resourceCtx.NamespaceLabels = nsLabels
+			nsAnnotations = nsAnns
 		}
 	}
 
-	// Determine enforce mode for this resource
-	enforceMode := h.config.IsEnforceModeContext(resourceCtx)
-	driftMode := h.config.GetModeForResourceContext(resourceCtx)
+	// Determine enforce mode using annotation-based resolution
+	// Precedence: object annotation > namespace annotation > config
+	objAnnotations := obj.GetAnnotations()
+	if objAnnotations == nil {
+		objAnnotations = map[string]string{}
+	}
+	if nsAnnotations == nil {
+		nsAnnotations = map[string]string{}
+	}
+	driftMode := h.config.ResolveModeWithAnnotations(objAnnotations, nsAnnotations, resourceCtx)
+	enforceMode := driftMode == config.ModeEnforce
 
 	if driftResult.DriftDetected {
 		// Check for approvals when drift is detected
@@ -653,13 +663,13 @@ func computeSpecDiff(req admission.Request) []byte {
 	return diffBytes
 }
 
-// getNamespaceLabels fetches labels from a namespace.
-func (h *Handler) getNamespaceLabels(ctx context.Context, namespace string) (map[string]string, error) {
+// getNamespaceMetadata fetches labels and annotations from a namespace.
+func (h *Handler) getNamespaceMetadata(ctx context.Context, namespace string) (labels, annotations map[string]string, err error) {
 	ns := &unstructured.Unstructured{}
 	ns.SetAPIVersion("v1")
 	ns.SetKind("Namespace")
 	if err := h.client.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return ns.GetLabels(), nil
+	return ns.GetLabels(), ns.GetAnnotations(), nil
 }
