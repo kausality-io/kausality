@@ -39,13 +39,13 @@ type PropagationResult struct {
 // Propagate determines the trace for a mutated object.
 // Deprecated: Use PropagateWithFieldManager for proper controller identification.
 func (p *Propagator) Propagate(ctx context.Context, obj client.Object, user string) (*PropagationResult, error) {
-	return p.PropagateWithFieldManager(ctx, obj, user, "")
+	return p.PropagateWithFieldManager(ctx, obj, user, "", "")
 }
 
 // PropagateWithFieldManager determines the trace for a mutated object.
 // For origins (no parent, parent not reconciling, or different actor), creates a new trace.
 // For controller hops (same fieldManager as controller, parent reconciling), extends parent's trace.
-func (p *Propagator) PropagateWithFieldManager(ctx context.Context, obj client.Object, user string, fieldManager string) (*PropagationResult, error) {
+func (p *Propagator) PropagateWithFieldManager(ctx context.Context, obj client.Object, user, fieldManager, requestUID string) (*PropagationResult, error) {
 	// Resolve parent state
 	parentState, err := p.resolver.ResolveParent(ctx, obj)
 	if err != nil {
@@ -73,7 +73,7 @@ func (p *Propagator) PropagateWithFieldManager(ctx context.Context, obj client.O
 	if isOrigin {
 		// Create new trace starting with this object
 		result.Trace = Trace{
-			NewHopWithLabels(apiVersion, gvk.Kind, obj.GetName(), obj.GetGeneration(), user, labels),
+			NewHopWithLabels(apiVersion, gvk.Kind, obj.GetName(), obj.GetGeneration(), user, requestUID, labels),
 		}
 	} else {
 		// Get parent's trace
@@ -84,7 +84,7 @@ func (p *Propagator) PropagateWithFieldManager(ctx context.Context, obj client.O
 		result.ParentTrace = parentTrace
 
 		// Extend trace with new hop (each hop has its own labels, no inheritance)
-		hop := NewHopWithLabels(apiVersion, gvk.Kind, obj.GetName(), obj.GetGeneration(), user, labels)
+		hop := NewHopWithLabels(apiVersion, gvk.Kind, obj.GetName(), obj.GetGeneration(), user, requestUID, labels)
 		result.Trace = parentTrace.Append(hop)
 	}
 

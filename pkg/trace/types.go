@@ -29,6 +29,8 @@ type Hop struct {
 	Generation int64 `json:"generation"`
 	// User who made the mutation (human/CI at origin, service account for controllers).
 	User string `json:"user"`
+	// RequestUID is the unique identifier of the admission request that caused this mutation.
+	RequestUID string `json:"requestUID,omitempty"`
 	// Timestamp of the mutation.
 	Timestamp time.Time `json:"timestamp"`
 	// Labels contains custom metadata from kausality.io/trace-* annotations.
@@ -96,20 +98,21 @@ func (t Trace) Append(hop Hop) Trace {
 }
 
 // NewHop creates a new Hop with the current timestamp.
-func NewHop(apiVersion, kind, name string, generation int64, user string) Hop {
+func NewHop(apiVersion, kind, name string, generation int64, user, requestUID string) Hop {
 	return Hop{
 		APIVersion: apiVersion,
 		Kind:       kind,
 		Name:       name,
 		Generation: generation,
 		User:       user,
+		RequestUID: requestUID,
 		Timestamp:  time.Now().UTC(),
 	}
 }
 
 // NewHopWithLabels creates a new Hop with the current timestamp and custom labels.
-func NewHopWithLabels(apiVersion, kind, name string, generation int64, user string, labels map[string]string) Hop {
-	hop := NewHop(apiVersion, kind, name, generation, user)
+func NewHopWithLabels(apiVersion, kind, name string, generation int64, user, requestUID string, labels map[string]string) Hop {
+	hop := NewHop(apiVersion, kind, name, generation, user, requestUID)
 	if len(labels) > 0 {
 		hop.Labels = labels
 	}

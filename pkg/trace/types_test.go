@@ -140,13 +140,14 @@ func TestTrace_Append(t *testing.T) {
 }
 
 func TestNewHop(t *testing.T) {
-	hop := NewHop("apps/v1", "Deployment", "test", 5, "hans@example.com")
+	hop := NewHop("apps/v1", "Deployment", "test", 5, "hans@example.com", "req-123")
 
 	assert.Equal(t, "apps/v1", hop.APIVersion)
 	assert.Equal(t, "Deployment", hop.Kind)
 	assert.Equal(t, "test", hop.Name)
 	assert.Equal(t, int64(5), hop.Generation)
 	assert.Equal(t, "hans@example.com", hop.User)
+	assert.Equal(t, "req-123", hop.RequestUID)
 	assert.False(t, hop.Timestamp.IsZero(), "Timestamp should not be zero")
 }
 
@@ -228,20 +229,21 @@ func TestExtractTraceLabels(t *testing.T) {
 
 func TestNewHopWithLabels(t *testing.T) {
 	labels := map[string]string{"ticket": "JIRA-123", "env": "prod"}
-	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "hans@example.com", labels)
+	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "hans@example.com", "req-456", labels)
 
 	assert.Equal(t, "apps/v1", hop.APIVersion)
+	assert.Equal(t, "req-456", hop.RequestUID)
 	assert.Len(t, hop.Labels, 2)
 	assert.Equal(t, "JIRA-123", hop.Labels["ticket"])
 }
 
 func TestNewHopWithLabels_NilLabels(t *testing.T) {
-	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "user", nil)
+	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "user", "req-789", nil)
 	assert.Nil(t, hop.Labels, "Labels should be nil for nil input")
 }
 
 func TestNewHopWithLabels_EmptyLabels(t *testing.T) {
-	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "user", map[string]string{})
+	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "user", "", map[string]string{})
 	assert.Nil(t, hop.Labels, "Labels should be nil for empty input")
 }
 

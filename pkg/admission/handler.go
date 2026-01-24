@@ -200,7 +200,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 
 	// Propagate trace
-	traceResult, err := h.propagator.PropagateWithFieldManager(ctx, obj, req.UserInfo.Username, fieldManager)
+	traceResult, err := h.propagator.PropagateWithFieldManager(ctx, obj, req.UserInfo.Username, fieldManager, string(req.UID))
 	if err != nil {
 		log.Error(err, "trace propagation failed")
 		// Don't fail the request on trace errors - just log and continue

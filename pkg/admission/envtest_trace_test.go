@@ -61,7 +61,7 @@ func TestTracePropagation_ExtendParent(t *testing.T) {
 
 	// Set a trace on the parent
 	parentTrace := trace.Trace{
-		trace.NewHop("apps/v1", "Deployment", deploy.Name, deploy.Generation, "parent-user"),
+		trace.NewHop("apps/v1", "Deployment", deploy.Name, deploy.Generation, "parent-user", ""),
 	}
 	annotations := deploy.GetAnnotations()
 	if annotations == nil {
@@ -134,7 +134,7 @@ func TestDifferentActor_NewTraceOrigin(t *testing.T) {
 
 	// Set a trace on the parent
 	parentTrace := trace.Trace{
-		trace.NewHop("apps/v1", "Deployment", deploy.Name, deploy.Generation, "original-user"),
+		trace.NewHop("apps/v1", "Deployment", deploy.Name, deploy.Generation, "original-user", ""),
 	}
 	annotations := deploy.GetAnnotations()
 	if annotations == nil {
@@ -167,7 +167,7 @@ func TestDifferentActor_NewTraceOrigin(t *testing.T) {
 
 	// Propagate trace with DIFFERENT fieldManager (simulating kubectl or another actor)
 	propagator := trace.NewPropagator(k8sClient)
-	result, err := propagator.PropagateWithFieldManager(ctx, rs, "different-user", "kubectl-edit")
+	result, err := propagator.PropagateWithFieldManager(ctx, rs, "different-user", "kubectl-edit", "test-req-uid")
 	if err != nil {
 		t.Fatalf("propagation failed: %v", err)
 	}
