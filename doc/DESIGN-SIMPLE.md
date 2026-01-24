@@ -1,6 +1,6 @@
 # Drift Detection and Escalation
 
-**Simplified Design**
+**Simplified Design — Admission-Only**
 
 ## Context
 
@@ -15,63 +15,153 @@ Unexpected changes can cause infrastructure modifications without explicit inten
 
 ## Design
 
-Implement a change detection and approval system that:
-1. Detects unexpected changes via dry-run before applying
+Implement an **admission-only** change detection and approval system that:
+1. Detects unexpected changes by checking parent state at admission time
 2. Blocks unexpected changes until explicitly approved or matching an exception policy
 3. Escalates to Slack for human (or AI) approval
 4. Tracks request provenance through the resource hierarchy
 
+**Key constraint**: No controller modifications required. All logic runs in admission.
+
 ### Detection Mechanism
 
-**For Kubernetes Objects (Server-Side Apply):**
-- Use SSA dry-run to detect if an apply would modify the object
-- Compare dry-run result against current state
-- Only proceed if no changes OR change is approved
+When a controller mutates a child object, admission intercepts and checks the **parent's** state:
 
-**For Terraform (L0 controllers):**
+```
+parent := resolve via controller ownerReference (controller: true)
+
+if parent.generation != parent.status.observedGeneration:
+    # Parent spec changed → expected change → ALLOW
+else:
+    # Parent spec unchanged → drift → check approvals
+```
+
+**Why this works**: Controllers reconcile children based on their own spec. If the parent's spec hasn't changed (gen == obsGen), any child mutation is from drift.
+
+**For Terraform (L0 controllers)**:
 - Check if plan is non-empty when generation == observedGeneration
 - Future: TerraformApprovalPolicy CRD for plan-based exceptions
 
 ### Approval and Rejection Annotations
 
 ```yaml
-# On parent resource - approvals for allowed changes
-kausality.io/approvals: |
-  [
-    {
-      "apiVersion": "v1",
-      "kind": "ConfigMap",
-      "name": "bar",
-      "generation": 5,
-      "expiry": "2026-01-21T12:00:00Z"
-    }
-  ]
-
-# On parent resource - rejections for blocked changes
-kausality.io/rejections: |
-  [
-    {
-      "apiVersion": "example.com/v1alpha1",
-      "kind": "EKSCluster",
-      "name": "cluster-1",
-      "generation": 2,
-      "reason": "Change not approved by SRE team"
-    }
-  ]
+# On parent resource (e.g., EKSCluster)
+metadata:
+  annotations:
+    kausality.io/approvals: |
+      [
+        {
+          "apiVersion": "v1",
+          "kind": "ConfigMap",
+          "name": "bar",
+          "generation": 5,
+          "mode": "once"
+        },
+        {
+          "apiVersion": "v1",
+          "kind": "Secret",
+          "name": "credentials",
+          "mode": "always"
+        }
+      ]
+    kausality.io/rejections: |
+      [
+        {
+          "apiVersion": "example.com/v1alpha1",
+          "kind": "NodePool",
+          "name": "pool-1",
+          "generation": 5,
+          "reason": "Destructive change, needs SRE review"
+        }
+      ]
+    kausality.io/request-trace: "ace-123,cluster-456"
 ```
 
-- Namespace is implicit (same as parent) - only applies to namespaced resources
-- Approvals are consumed (removed) when used
-- Rejections remain and cause `Synced=False` with rejection message
-- Admission plugin prunes both lists when parent generation changes
+- Namespace is implicit (same as parent) — only applies to namespaced resources
+- `generation` field is only required for `once` and `generation` modes, not for `always`
+- Admission plugin prunes approvals when parent generation changes
+
+### Approval Modes
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `once` | Removed after first allowed mutation | One-time drift fix, strict control |
+| `generation` | Valid while `parent.generation == approval.generation` | Approve for current state, invalidate on spec change |
+| `always` | Permanent, never automatically pruned | Known-safe pattern, permanent exception |
+
+### Approval Validity
+
+An approval is valid when:
+1. `approval.apiVersion/kind/name` matches the child being mutated
+2. Mode-specific:
+   - `once`: not yet consumed AND `approval.generation == parent.generation`
+   - `generation`: `approval.generation == parent.generation`
+   - `always`: always valid
+
+### Pruning Rules
+
+| Trigger | Effect |
+|---------|--------|
+| Parent generation changes | `once` and `generation` approvals with `generation < parent.generation` are pruned |
+| Approval used (`mode: once`) | That specific approval is removed |
+| `mode: always` | Never pruned automatically (explicit removal required) |
+
+### Freeze and Snooze
+
+Additional parent annotations for operational control:
+
+```yaml
+metadata:
+  annotations:
+    kausality.io/freeze: "true"                        # Block ALL changes
+    kausality.io/snooze-until: "2026-01-25T00:00:00Z"  # Suppress escalation
+```
+
+| Annotation | Effect |
+|------------|--------|
+| `freeze: "true"` | Block ALL child mutations, even expected changes (parent spec change). Emergency lockdown. |
+| `snooze-until: <timestamp>` | Block drift but don't escalate to Slack until timestamp. Suppresses notifications, not permissions. |
+
+### Lifecycle Phases
+
+#### Initialization
+
+During initialization, all child changes are allowed (including CREATE). Detection priority (default, configurable per GVK):
+
+1. `Initialized=True` condition exists
+2. `Ready=True` condition exists (with persistence — see below)
+3. `status.observedGeneration` exists
+
+Once initialized, admission stores:
+```yaml
+kausality.io/initialized: "true"
+```
+
+This persists the initialized state for resources with flapping conditions (e.g., Crossplane Ready).
+
+#### Deletion
+
+When parent has `metadata.deletionTimestamp`:
+- Allow ALL child mutations (cleanup phase)
+- No drift checks, no approvals needed
+
+### Operations by Type
+
+| Operation | Drift Rules |
+|-----------|-------------|
+| CREATE | Allowed during initialization. Blocked during drift (requires approval). |
+| UPDATE | Blocked during drift unless approved. |
+| DELETE | Blocked during drift unless approved (same as UPDATE). |
 
 ### ApprovalPolicy CRD
+
+For pattern-based exceptions (reduce per-object approval burden):
 
 ```yaml
 apiVersion: kausality.io/v1alpha1
 kind: ApprovalPolicy
 metadata:
-  name: controller-l1-compute  # service account name
+  name: controller-l1-compute   # typically matches SA name
   namespace: infra
 spec:
   rules:
@@ -79,10 +169,11 @@ spec:
     kind: "ConfigMap"
     namespace: "*"
     name: "*"
-    prereqs:  # CEL/regexp on old object
+    prereqs:                    # CEL on old object
       cel: "object.metadata.labels['env'] == 'dev'"
-    match:    # CEL/regexp on new object
+    match:                      # CEL/regexp on new object
       regexp: '{"data":{"version":".*"}}'
+    mode: "always"
     expiry: "2026-06-01T00:00:00Z"
 ```
 
@@ -94,13 +185,14 @@ spec:
 ### Request Tracing
 
 ```yaml
-# Initialized by admission at L2/L1, propagated down
+# Initialized by admission, propagated down
 kausality.io/request-trace: "ace-123,cluster-456,ekscluster-789"
 kausality.io/jira-issue: "NGCC-1234"  # optional, passed through
 ```
 
 - Auto-generated at admission if not present
-- Appended at each controller level
+- **Replaced** when parent generation changes (new causal chain)
+- **Extended** with drift approval info when drift is corrected
 - Auxiliary fields (jira-issue) passed through unchanged
 
 ### Slack Escalation
@@ -114,47 +206,99 @@ When unexpected change detected and no approval/policy match:
 2. "Add Exception" opens dialog to create ApprovalPolicy rule
 3. Approval/rejection updates the annotation via Slack bot
 
-### Reconcile Flow
+### Admission Flow
 
 ```
-if generation != observedGeneration:
-    proceed with changes (expected)
-else if not Initialized:
-    proceed with changes (initial setup)
-else:
-    dry-run the change
-    if no diff:
-        proceed (no-op)
-    else:
-        check rejections annotation
-        if rejected:
-            set Synced=False with rejection message, stop
-        check approvals annotation
-        if approved:
-            consume approval, proceed
-        check ApprovalPolicy rules
-        if policy matches:
-            proceed
-        else:
-            escalate to Slack, block reconcile
+1. Receive child CREATE/UPDATE/DELETE (oldObject, object, userInfo)
+2. Resolve parent via controller ownerReference (controller: true)
+
+3. Check lifecycle phases (short-circuit):
+   a. If parent has deletionTimestamp → ALLOW (deletion cleanup)
+   b. If parent not initialized → ALLOW (initialization phase)
+   c. If parent has freeze annotation → DENY (frozen)
+
+4. If parent.generation != parent.status.observedGeneration:
+     → Expected change (includes CREATE/UPDATE/DELETE), ALLOW
+     → Replace child trace with new chain from parent
+
+5. Else (drift case — applies to CREATE/UPDATE/DELETE):
+     a. Check kausality.io/rejections for matching child
+        → If rejected: DENY with reason
+     b. Check kausality.io/approvals for matching child
+        → If approved:
+            - Extend trace with drift approval info
+            - If mode=once: remove approval, ALLOW
+            - If mode=generation: ALLOW (pruned on next gen change)
+            - If mode=always: ALLOW
+     c. Check ApprovalPolicy rules for pattern match
+        → If policy matches: ALLOW
+     d. Else:
+        - If parent has snooze-until and not expired → DENY (no escalation)
+        - Else → DENY and escalate to Slack
 ```
+
+### Response Codes
+
+| Outcome | Response |
+|---------|----------|
+| Parent deleting | `allowed: true` |
+| Parent initializing | `allowed: true` |
+| Parent frozen | `allowed: false`, status 403 Forbidden, reason: frozen |
+| Expected change (gen != obsGen) | `allowed: true` |
+| Drift with valid approval | `allowed: true` |
+| Drift with ApprovalPolicy match | `allowed: true` |
+| Drift rejected (explicit rejection) | `allowed: false`, status 403 Forbidden, reason from rejection |
+| Drift snoozed (no escalation) | `allowed: false`, status 403 Forbidden, no Slack notification |
+| Drift without approval (blocked) | `allowed: false`, status 403 Forbidden, escalate to Slack |
+| Parent not found | `allowed: false`, status 422 Unprocessable |
+
+## Deployment Modes
+
+### Generic Control Plane (k8s.io/apiserver)
+- Admission logic built into custom apiserver
+- ApprovalPolicy served as native CRD
+- Single binary, no webhook latency
+
+### Stock Kubernetes (Webhooks + CEL)
+- MutatingAdmissionWebhook for annotation injection/pruning
+- ValidatingAdmissionWebhook for enforcement
+- ValidatingAdmissionPolicy (CEL) for simple fast-path checks:
+  - `object.metadata.generation == object.status.observedGeneration` → drift candidate
+  - `has(object.metadata.deletionTimestamp)` → deletion phase
+
+## Design Decisions
+
+- **Multi-parent**: Only the controller ownerRef (`controller: true`) is subject to drift detection. Other ownerRefs are ignored.
+- **Cross-namespace**: Works as-is. ownerRef traversal works regardless of namespace (cluster-scoped parent, namespaced child is fine).
+
+### Consistency Trade-offs
+
+Admission uses informer cache for parent lookup. Cache may be stale:
+- **Stale gen > obsGen**: Cache shows parent not-yet-reconciled, reality is gen==obsGen. Could block expected change.
+- **Stale gen == obsGen**: Cache shows drift, reality is gen!=obsGen (spec just changed). Could allow drift without approval.
+
+This is inherent in distributed systems — cross-resource consistency is limited. Mitigation:
+- Keep informer cache fresh (reasonable resync period)
+- Accept occasional false positives/negatives as acceptable trade-off
+- Controllers retry on transient admission errors
 
 ## Implementation
 
-### Phase 1: SSA Dry-Run Change Detection (Logging Only)
-- Implement dry-run detection in SSA apply helpers
-- Log when unexpected changes would occur
-- Optional Slack notifications (token and client already available)
+### Phase 1: Admission-Based Change Detection (Logging Only)
+- Implement admission webhook/plugin
+- Check parent generation vs observedGeneration
+- Log when drift would be blocked
+- Optional Slack notifications
 - No blocking, observability only
 
 ### Phase 2: Request-Trace Annotation
-- Add admission plugin to initialize request-trace
-- Propagate trace through controller hierarchy
+- Initialize request-trace on parent mutations
+- Propagate/replace trace through controller hierarchy
 
 ### Phase 3: Per-Object Approval Annotation
-- Implement approval annotation parsing
+- Implement approval annotation parsing with modes (once, generation, always)
 - Add pruning on generation change via admission
-- Block unexpected changes without approval
+- Block drift without approval
 
 ### Phase 4: ApprovalPolicy CRD and Slack Integration
 - Define and implement ApprovalPolicy CRD
@@ -171,6 +315,7 @@ else:
 - **Audit Trail**: Request-trace and Slack history provide comprehensive audit trail
 - **Flexible Exceptions**: ApprovalPolicy rules reduce operational toil for known-safe patterns
 - **AI-Ready**: Foundation for AI-assisted approvals in the future
+- **Controller-Agnostic**: Works without modifying existing controllers
 
 ## Consequences
 
@@ -179,16 +324,19 @@ else:
 - Audit trail via request-trace and Slack history
 - Flexible exception rules reduce operational toil
 - Foundation for AI-assisted approvals
+- No controller modifications required
 
 ### Negative
-- Reconcile latency when approval required
+- Admission latency for parent lookup
 - Operational overhead for initial policy setup
 - Slack dependency for escalation path
+- Informer cache staleness can cause false positives/negatives
 
 ### Mitigations
 - Phase 1 logging-only allows gradual rollout
 - ApprovalPolicy reduces manual approval burden
-- Expiry on approvals prevents stale exceptions
+- Approval modes (once, generation, always) cover different use cases
+- Freeze/snooze provide operational escape hatches
 
 ## Alternatives Considered
 
@@ -200,3 +348,6 @@ Rejected: Would require manual approval for every change, too much operational b
 
 ### Hash-Based Spec Change Detection Instead of Generation
 Rejected: Generation/observedGeneration is already the standard Kubernetes pattern and sufficient for our needs.
+
+### Controller-Based Detection (Dry-Run in Controller)
+Rejected for simplified design: Requires controller modifications. Admission-only approach works without touching controllers.
