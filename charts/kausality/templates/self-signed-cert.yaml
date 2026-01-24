@@ -1,0 +1,73 @@
+{{- if and .Values.certificates.selfSigned.enabled .Values.resourceRules.include }}
+{{- $serviceName := include "kausality.webhookServiceName" . -}}
+{{- $secretName := include "kausality.certificateSecretName" . -}}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $ca := "" -}}
+{{- $cert := "" -}}
+{{- $key := "" -}}
+{{- if $existingSecret -}}
+  {{- $ca = index $existingSecret.data "ca.crt" -}}
+  {{- $cert = index $existingSecret.data "tls.crt" -}}
+  {{- $key = index $existingSecret.data "tls.key" -}}
+{{- else -}}
+  {{- $caObj := genCA "kausality-ca" 3650 -}}
+  {{- $altNames := list $serviceName (printf "%s.%s" $serviceName .Release.Namespace) (printf "%s.%s.svc" $serviceName .Release.Namespace) (printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace) -}}
+  {{- $certObj := genSignedCert $serviceName nil $altNames 3650 $caObj -}}
+  {{- $ca = $caObj.Cert | b64enc -}}
+  {{- $cert = $certObj.Cert | b64enc -}}
+  {{- $key = $certObj.Key | b64enc -}}
+{{- end -}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "kausality.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $cert }}
+  tls.key: {{ $key }}
+  ca.crt: {{ $ca }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "kausality.fullname" . }}
+  labels:
+    {{- include "kausality.labels" . | nindent 4 }}
+webhooks:
+  - name: mutating.webhook.kausality.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: NoneOnDryRun
+    reinvocationPolicy: IfNeeded
+    timeoutSeconds: 10
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    clientConfig:
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: {{ .Values.service.port }}
+      caBundle: {{ $ca }}
+    rules:
+      {{- range .Values.resourceRules.include }}
+      - apiGroups:
+          {{- toYaml .apiGroups | nindent 10 }}
+        apiVersions: ["*"]
+        resources:
+          {{- toYaml .resources | nindent 10 }}
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        scope: "*"
+      {{- end }}
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            {{- toYaml .Values.excludeNamespaces | nindent 12 }}
+{{- end }}

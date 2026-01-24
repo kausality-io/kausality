@@ -1,5 +1,5 @@
 # ko configuration for kausality
-defaultBaseImage: gcr.io/distroless/static:nonroot
+defaultBaseImage: cgr.dev/chainguard/static:latest
 
 builds:
   - id: kausality-webhook

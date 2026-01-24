@@ -1,4 +1,4 @@
-{{- if .Values.resourceRules.include }}
+{{- if and .Values.resourceRules.include (not .Values.certificates.selfSigned.enabled) }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
@@ -23,7 +23,6 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /mutate
         port: {{ .Values.service.port }}
-      # caBundle will be injected by cert-manager or the webhook-cert-gen job
     rules:
       {{- range .Values.resourceRules.include }}
       - apiGroups:
