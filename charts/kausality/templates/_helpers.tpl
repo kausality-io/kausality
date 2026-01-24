@@ -72,3 +72,38 @@ Create the certificate secret name
 {{- define "kausality.certificateSecretName" -}}
 {{- printf "%s-webhook-cert" (include "kausality.fullname" .) }}
 {{- end }}
+
+{{/*
+Backend fullname
+*/}}
+{{- define "kausality.backendFullname" -}}
+{{- printf "%s-backend" (include "kausality.fullname" .) }}
+{{- end }}
+
+{{/*
+Backend labels
+*/}}
+{{- define "kausality.backendLabels" -}}
+helm.sh/chart: {{ include "kausality.chart" . }}
+{{ include "kausality.backendSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Backend selector labels
+*/}}
+{{- define "kausality.backendSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "kausality.name" . }}-backend
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: backend
+{{- end }}
+
+{{/*
+Backend service URL (for webhook to call)
+*/}}
+{{- define "kausality.backendServiceURL" -}}
+{{- printf "http://%s.%s.svc.cluster.local:%d/webhook" (include "kausality.backendFullname" .) .Release.Namespace (.Values.backend.service.port | int) }}
+{{- end }}
