@@ -187,13 +187,21 @@ spec:
 ```yaml
 # Initialized by admission, propagated down
 kausality.io/request-trace: "ace-123,cluster-456,ekscluster-789"
-kausality.io/jira-issue: "NGCC-1234"  # optional, passed through
 ```
 
 - Auto-generated at admission if not present
 - **Replaced** when parent generation changes (new causal chain)
 - **Extended** with drift approval info when drift is corrected
-- Auxiliary fields (jira-issue) passed through unchanged
+
+#### Trace Metadata (Possible Extension)
+
+The trace format and additional metadata propagation (e.g., Jira issues, PR links, Slack threads) is intentionally left unspecified for now. Possible future extensions include:
+
+- Structured JSON trace format with origin, refs, and hop history
+- TraceConfig CRD defining which annotations to propagate
+- Convention-based propagation (e.g., `kausality.io/trace-*` annotations)
+
+This will be designed based on real-world usage patterns.
 
 ### Slack Escalation
 
