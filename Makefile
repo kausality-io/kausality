@@ -1,0 +1,113 @@
+# Kausality - Drift detection for Kubernetes controllers
+
+# Image URL to use all building/pushing image targets
+IMG ?= ghcr.io/sttts/kausality:latest
+
+# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
+ifeq (,$(shell go env GOBIN))
+GOBIN=$(shell go env GOPATH)/bin
+else
+GOBIN=$(shell go env GOBIN)
+endif
+
+# Setting SHELL to bash allows bash commands to be executed by recipes.
+SHELL = /usr/bin/env bash -o pipefail
+.SHELLFLAGS = -ec
+
+.PHONY: all
+all: build
+
+##@ General
+
+.PHONY: help
+help: ## Display this help.
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+##@ Development
+
+.PHONY: fmt
+fmt: ## Run go fmt against code.
+	go fmt ./...
+
+.PHONY: vet
+vet: ## Run go vet against code.
+	go vet ./...
+
+.PHONY: test
+test: fmt vet ## Run tests.
+	go test ./... -coverprofile cover.out
+
+.PHONY: test-verbose
+test-verbose: fmt vet ## Run tests with verbose output.
+	go test ./... -v
+
+.PHONY: lint
+lint: golangci-lint ## Run golangci-lint linter.
+	$(GOLANGCI_LINT) run
+
+.PHONY: lint-fix
+lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes.
+	$(GOLANGCI_LINT) run --fix
+
+##@ Build
+
+.PHONY: build
+build: fmt vet ## Build webhook binary.
+	go build -o bin/kausality-webhook ./cmd/kausality-webhook
+
+.PHONY: run
+run: fmt vet ## Run the webhook from your host (for development).
+	go run ./cmd/kausality-webhook
+
+.PHONY: docker-build
+docker-build: ## Build docker image.
+	docker build -t ${IMG} .
+
+.PHONY: docker-push
+docker-push: ## Push docker image.
+	docker push ${IMG}
+
+##@ Deployment
+
+.PHONY: install
+install: helm ## Install the webhook to the K8s cluster specified in ~/.kube/config.
+	$(HELM) upgrade --install kausality ./charts/kausality
+
+.PHONY: uninstall
+uninstall: helm ## Uninstall the webhook from the K8s cluster specified in ~/.kube/config.
+	$(HELM) uninstall kausality
+
+##@ Dependencies
+
+## Location to install dependencies to
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
+
+## Tool Binaries
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+HELM ?= $(LOCALBIN)/helm
+
+## Tool Versions
+GOLANGCI_LINT_VERSION ?= v1.62.2
+HELM_VERSION ?= v3.16.3
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
+$(GOLANGCI_LINT): $(LOCALBIN)
+	@test -s $(GOLANGCI_LINT) && $(GOLANGCI_LINT) version --format short | grep -q $(GOLANGCI_LINT_VERSION:v%=%) || \
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LOCALBIN) $(GOLANGCI_LINT_VERSION)
+
+.PHONY: helm
+helm: $(HELM) ## Download helm locally if necessary.
+$(HELM): $(LOCALBIN)
+	@test -s $(HELM) || { \
+		curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 && \
+		chmod 700 get_helm.sh && \
+		HELM_INSTALL_DIR=$(LOCALBIN) USE_SUDO=false ./get_helm.sh --version $(HELM_VERSION) && \
+		rm get_helm.sh; \
+	}
+
+.PHONY: clean
+clean: ## Clean up build artifacts.
+	rm -rf bin/ cover.out
