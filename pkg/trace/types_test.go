@@ -2,8 +2,13 @@ package trace
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTrace_Parse(t *testing.T) {
@@ -53,13 +58,12 @@ func TestTrace_Parse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			trace, err := Parse(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Parse() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-			if !tt.wantErr && len(trace) != tt.want {
-				t.Errorf("Parse() got %d hops, want %d", len(trace), tt.want)
-			}
+			require.NoError(t, err)
+			assert.Len(t, trace, tt.want)
 		})
 	}
 }
@@ -75,17 +79,9 @@ func TestTrace_String(t *testing.T) {
 
 	// Parse it back
 	parsed, err := Parse(str)
-	if err != nil {
-		t.Fatalf("failed to parse trace string: %v", err)
-	}
-
-	if len(parsed) != 1 {
-		t.Fatalf("expected 1 hop, got %d", len(parsed))
-	}
-
-	if parsed[0].Kind != "Deployment" {
-		t.Errorf("Kind = %q, want %q", parsed[0].Kind, "Deployment")
-	}
+	require.NoError(t, err, "failed to parse trace string")
+	require.Len(t, parsed, 1, "expected 1 hop")
+	assert.Equal(t, "Deployment", parsed[0].Kind)
 }
 
 func TestTrace_Origin(t *testing.T) {
@@ -117,15 +113,12 @@ func TestTrace_Origin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.trace.Origin()
-			if tt.want == nil && got != nil {
-				t.Errorf("Origin() = %v, want nil", got)
+			if tt.want == nil {
+				assert.Nil(t, got)
+				return
 			}
-			if tt.want != nil && got == nil {
-				t.Errorf("Origin() = nil, want %v", tt.want)
-			}
-			if tt.want != nil && got != nil && got.Kind != tt.want.Kind {
-				t.Errorf("Origin().Kind = %q, want %q", got.Kind, tt.want.Kind)
-			}
+			require.NotNil(t, got)
+			assert.Equal(t, tt.want.Kind, got.Kind)
 		})
 	}
 }
@@ -139,52 +132,29 @@ func TestTrace_Append(t *testing.T) {
 	extended := original.Append(newHop)
 
 	// Original should be unchanged
-	if len(original) != 1 {
-		t.Errorf("original trace modified, got %d hops", len(original))
-	}
+	assert.Len(t, original, 1, "original trace should be unchanged")
 
 	// Extended should have 2 hops
-	if len(extended) != 2 {
-		t.Errorf("extended trace has %d hops, want 2", len(extended))
-	}
-
-	if extended[1].Kind != "ReplicaSet" {
-		t.Errorf("extended[1].Kind = %q, want %q", extended[1].Kind, "ReplicaSet")
-	}
+	require.Len(t, extended, 2)
+	assert.Equal(t, "ReplicaSet", extended[1].Kind)
 }
 
 func TestNewHop(t *testing.T) {
 	hop := NewHop("apps/v1", "Deployment", "test", 5, "hans@example.com")
 
-	if hop.APIVersion != "apps/v1" {
-		t.Errorf("APIVersion = %q, want %q", hop.APIVersion, "apps/v1")
-	}
-	if hop.Kind != "Deployment" {
-		t.Errorf("Kind = %q, want %q", hop.Kind, "Deployment")
-	}
-	if hop.Name != "test" {
-		t.Errorf("Name = %q, want %q", hop.Name, "test")
-	}
-	if hop.Generation != 5 {
-		t.Errorf("Generation = %d, want %d", hop.Generation, 5)
-	}
-	if hop.User != "hans@example.com" {
-		t.Errorf("User = %q, want %q", hop.User, "hans@example.com")
-	}
-	if hop.Timestamp.IsZero() {
-		t.Error("Timestamp should not be zero")
-	}
+	assert.Equal(t, "apps/v1", hop.APIVersion)
+	assert.Equal(t, "Deployment", hop.Kind)
+	assert.Equal(t, "test", hop.Name)
+	assert.Equal(t, int64(5), hop.Generation)
+	assert.Equal(t, "hans@example.com", hop.User)
+	assert.False(t, hop.Timestamp.IsZero(), "Timestamp should not be zero")
 }
 
 func TestTrace_MarshalJSON_Nil(t *testing.T) {
 	var trace Trace = nil
 	data, err := json.Marshal(trace)
-	if err != nil {
-		t.Fatalf("Marshal error: %v", err)
-	}
-	if string(data) != "[]" {
-		t.Errorf("Marshal(nil) = %q, want %q", string(data), "[]")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "[]", string(data))
 }
 
 func TestExtractTraceLabels(t *testing.T) {
@@ -249,16 +219,8 @@ func TestExtractTraceLabels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ExtractTraceLabels(tt.annotations)
-			if len(got) != len(tt.want) {
-				t.Errorf("ExtractTraceLabels() got %d labels, want %d", len(got), len(tt.want))
-				t.Logf("got: %v", got)
-				t.Logf("want: %v", tt.want)
-				return
-			}
-			for k, v := range tt.want {
-				if got[k] != v {
-					t.Errorf("ExtractTraceLabels()[%q] = %q, want %q", k, got[k], v)
-				}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("ExtractTraceLabels() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -268,29 +230,19 @@ func TestNewHopWithLabels(t *testing.T) {
 	labels := map[string]string{"ticket": "JIRA-123", "env": "prod"}
 	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "hans@example.com", labels)
 
-	if hop.APIVersion != "apps/v1" {
-		t.Errorf("APIVersion = %q, want %q", hop.APIVersion, "apps/v1")
-	}
-	if len(hop.Labels) != 2 {
-		t.Errorf("Labels count = %d, want 2", len(hop.Labels))
-	}
-	if hop.Labels["ticket"] != "JIRA-123" {
-		t.Errorf("Labels[ticket] = %q, want %q", hop.Labels["ticket"], "JIRA-123")
-	}
+	assert.Equal(t, "apps/v1", hop.APIVersion)
+	assert.Len(t, hop.Labels, 2)
+	assert.Equal(t, "JIRA-123", hop.Labels["ticket"])
 }
 
 func TestNewHopWithLabels_NilLabels(t *testing.T) {
 	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "user", nil)
-	if hop.Labels != nil {
-		t.Errorf("Labels should be nil for nil input, got %v", hop.Labels)
-	}
+	assert.Nil(t, hop.Labels, "Labels should be nil for nil input")
 }
 
 func TestNewHopWithLabels_EmptyLabels(t *testing.T) {
 	hop := NewHopWithLabels("apps/v1", "Deployment", "test", 5, "user", map[string]string{})
-	if hop.Labels != nil {
-		t.Errorf("Labels should be nil for empty input, got %v", hop.Labels)
-	}
+	assert.Nil(t, hop.Labels, "Labels should be nil for empty input")
 }
 
 func TestHopWithLabels_JSON(t *testing.T) {
@@ -306,19 +258,12 @@ func TestHopWithLabels_JSON(t *testing.T) {
 	}
 
 	data, err := json.Marshal(hop)
-	if err != nil {
-		t.Fatalf("Marshal error: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify labels are included
 	var parsed Hop
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("Unmarshal error: %v", err)
-	}
-
-	if parsed.Labels["ticket"] != "JIRA-123" {
-		t.Errorf("Labels[ticket] = %q, want %q", parsed.Labels["ticket"], "JIRA-123")
-	}
+	require.NoError(t, json.Unmarshal(data, &parsed))
+	assert.Equal(t, "JIRA-123", parsed.Labels["ticket"])
 }
 
 func TestHopWithoutLabels_JSON(t *testing.T) {
@@ -333,22 +278,8 @@ func TestHopWithoutLabels_JSON(t *testing.T) {
 	}
 
 	data, err := json.Marshal(hop)
-	if err != nil {
-		t.Fatalf("Marshal error: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Verify labels field is omitted (omitempty)
-	str := string(data)
-	if contains(str, "labels") {
-		t.Errorf("JSON should not contain 'labels' field when empty: %s", str)
-	}
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	assert.False(t, strings.Contains(string(data), "labels"), "JSON should not contain 'labels' field when empty")
 }

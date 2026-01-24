@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -82,17 +85,11 @@ func TestFindControllerOwnerRef(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := findControllerOwnerRef(tt.refs)
 			if tt.wantNil {
-				if got != nil {
-					t.Errorf("findControllerOwnerRef() = %v, want nil", got)
-				}
+				assert.Nil(t, got)
 				return
 			}
-			if got == nil {
-				t.Fatal("findControllerOwnerRef() = nil, want non-nil")
-			}
-			if got.Name != tt.wantName {
-				t.Errorf("findControllerOwnerRef().Name = %q, want %q", got.Name, tt.wantName)
-			}
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantName, got.Name)
 		})
 	}
 }
@@ -227,25 +224,12 @@ func TestExtractParentState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := extractParentState(tt.parent, ownerRef)
-
-			if state.Generation != tt.wantGen {
-				t.Errorf("Generation = %d, want %d", state.Generation, tt.wantGen)
-			}
-			if state.ObservedGeneration != tt.wantObsG {
-				t.Errorf("ObservedGeneration = %d, want %d", state.ObservedGeneration, tt.wantObsG)
-			}
-			if state.HasObservedGeneration != tt.wantHasOG {
-				t.Errorf("HasObservedGeneration = %v, want %v", state.HasObservedGeneration, tt.wantHasOG)
-			}
-			if (state.DeletionTimestamp != nil) != tt.wantDel {
-				t.Errorf("DeletionTimestamp set = %v, want %v", state.DeletionTimestamp != nil, tt.wantDel)
-			}
-			if state.IsInitialized != tt.wantInit {
-				t.Errorf("IsInitialized = %v, want %v", state.IsInitialized, tt.wantInit)
-			}
-			if len(state.Conditions) != tt.wantConds {
-				t.Errorf("len(Conditions) = %d, want %d", len(state.Conditions), tt.wantConds)
-			}
+			assert.Equal(t, tt.wantGen, state.Generation, "Generation")
+			assert.Equal(t, tt.wantObsG, state.ObservedGeneration, "ObservedGeneration")
+			assert.Equal(t, tt.wantHasOG, state.HasObservedGeneration, "HasObservedGeneration")
+			assert.Equal(t, tt.wantDel, state.DeletionTimestamp != nil, "DeletionTimestamp set")
+			assert.Equal(t, tt.wantInit, state.IsInitialized, "IsInitialized")
+			assert.Len(t, state.Conditions, tt.wantConds, "Conditions")
 		})
 	}
 }
@@ -310,15 +294,10 @@ func TestExtractConditions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			conditions := extractConditions(tt.status)
-			if len(conditions) != tt.wantCount {
-				t.Errorf("len(conditions) = %d, want %d", len(conditions), tt.wantCount)
-			}
+			assert.Len(t, conditions, tt.wantCount)
 			for i, wantType := range tt.wantTypes {
-				if i >= len(conditions) {
-					break
-				}
-				if conditions[i].Type != wantType {
-					t.Errorf("conditions[%d].Type = %q, want %q", i, conditions[i].Type, wantType)
+				if i < len(conditions) {
+					assert.Equal(t, wantType, conditions[i].Type, "conditions[%d].Type", i)
 				}
 			}
 		})
@@ -336,17 +315,14 @@ func TestParentRefFromOwnerRef(t *testing.T) {
 
 	parentRef := ParentRefFromOwnerRef(ref, "my-namespace")
 
-	if parentRef.APIVersion != "apps/v1" {
-		t.Errorf("APIVersion = %q, want %q", parentRef.APIVersion, "apps/v1")
+	want := ParentRef{
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "test-deploy",
+		Namespace:  "my-namespace",
 	}
-	if parentRef.Kind != "Deployment" {
-		t.Errorf("Kind = %q, want %q", parentRef.Kind, "Deployment")
-	}
-	if parentRef.Name != "test-deploy" {
-		t.Errorf("Name = %q, want %q", parentRef.Name, "test-deploy")
-	}
-	if parentRef.Namespace != "my-namespace" {
-		t.Errorf("Namespace = %q, want %q", parentRef.Namespace, "my-namespace")
+	if diff := cmp.Diff(want, parentRef); diff != "" {
+		t.Errorf("ParentRefFromOwnerRef() mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -427,9 +403,7 @@ func TestFindControllerManager(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := findControllerManager(tt.managedFields)
-			if got != tt.wantManager {
-				t.Errorf("findControllerManager() = %q, want %q", got, tt.wantManager)
-			}
+			assert.Equal(t, tt.wantManager, got)
 		})
 	}
 }

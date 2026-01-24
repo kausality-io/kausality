@@ -2,6 +2,8 @@ package approval
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPruner_ConsumeOnce(t *testing.T) {
@@ -64,12 +66,8 @@ func TestPruner_ConsumeOnce(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, changed := pruner.ConsumeOnce(tt.approvals, tt.consumed)
-			if len(result) != tt.wantLen {
-				t.Errorf("len(result) = %d, want %d", len(result), tt.wantLen)
-			}
-			if changed != tt.wantChange {
-				t.Errorf("changed = %v, want %v", changed, tt.wantChange)
-			}
+			assert.Len(t, result, tt.wantLen)
+			assert.Equal(t, tt.wantChange, changed)
 		})
 	}
 }
@@ -141,18 +139,10 @@ func TestPruner_PruneStale(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := pruner.PruneStale(tt.approvals, tt.parentGeneration)
-			if len(result) != tt.wantLen {
-				t.Errorf("len(result) = %d, want %d", len(result), tt.wantLen)
-			}
-			if tt.wantNames != nil {
-				for i, name := range tt.wantNames {
-					if i >= len(result) {
-						t.Errorf("missing approval at index %d", i)
-						continue
-					}
-					if result[i].Name != name {
-						t.Errorf("result[%d].Name = %q, want %q", i, result[i].Name, name)
-					}
+			assert.Len(t, result, tt.wantLen)
+			for i, name := range tt.wantNames {
+				if i < len(result) {
+					assert.Equal(t, name, result[i].Name, "result[%d].Name", i)
 				}
 			}
 		})
@@ -197,12 +187,8 @@ func TestPruner_Prune(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := pruner.Prune(tt.approvals, tt.consumed, tt.parentGeneration)
-			if len(result.Approvals) != tt.wantLen {
-				t.Errorf("len(Approvals) = %d, want %d", len(result.Approvals), tt.wantLen)
-			}
-			if result.Changed != tt.wantChanged {
-				t.Errorf("Changed = %v, want %v", result.Changed, tt.wantChanged)
-			}
+			assert.Len(t, result.Approvals, tt.wantLen)
+			assert.Equal(t, tt.wantChanged, result.Changed)
 		})
 	}
 }

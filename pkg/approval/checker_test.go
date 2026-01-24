@@ -3,6 +3,9 @@ package approval
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -145,12 +148,8 @@ func TestChecker_Check(t *testing.T) {
 
 			result := checker.Check(parent, child, tt.parentGeneration)
 
-			if result.Approved != tt.wantApproved {
-				t.Errorf("Approved = %v, want %v (reason: %s)", result.Approved, tt.wantApproved, result.Reason)
-			}
-			if result.Rejected != tt.wantRejected {
-				t.Errorf("Rejected = %v, want %v (reason: %s)", result.Rejected, tt.wantRejected, result.Reason)
-			}
+			assert.Equal(t, tt.wantApproved, result.Approved, "Approved mismatch (reason: %s)", result.Reason)
+			assert.Equal(t, tt.wantRejected, result.Rejected, "Rejected mismatch (reason: %s)", result.Reason)
 		})
 	}
 }
@@ -179,18 +178,10 @@ func TestChecker_MatchedApproval(t *testing.T) {
 
 	result := checker.Check(parent, child, 5)
 
-	if !result.Approved {
-		t.Fatalf("expected approved")
-	}
-	if result.MatchedApproval == nil {
-		t.Fatal("expected MatchedApproval to be set")
-	}
-	if result.MatchedApproval.Mode != ModeOnce {
-		t.Errorf("MatchedApproval.Mode = %q, want %q", result.MatchedApproval.Mode, ModeOnce)
-	}
-	if result.MatchedApproval.Generation != 5 {
-		t.Errorf("MatchedApproval.Generation = %d, want 5", result.MatchedApproval.Generation)
-	}
+	require.True(t, result.Approved, "expected approved")
+	require.NotNil(t, result.MatchedApproval, "expected MatchedApproval to be set")
+	assert.Equal(t, ModeOnce, result.MatchedApproval.Mode)
+	assert.Equal(t, int64(5), result.MatchedApproval.Generation)
 }
 
 func TestChecker_MatchedRejection(t *testing.T) {
@@ -217,18 +208,10 @@ func TestChecker_MatchedRejection(t *testing.T) {
 
 	result := checker.Check(parent, child, 1)
 
-	if !result.Rejected {
-		t.Fatalf("expected rejected")
-	}
-	if result.MatchedRejection == nil {
-		t.Fatal("expected MatchedRejection to be set")
-	}
-	if result.MatchedRejection.Reason != "too risky" {
-		t.Errorf("MatchedRejection.Reason = %q, want %q", result.MatchedRejection.Reason, "too risky")
-	}
-	if result.Reason != "too risky" {
-		t.Errorf("Reason = %q, want %q", result.Reason, "too risky")
-	}
+	require.True(t, result.Rejected, "expected rejected")
+	require.NotNil(t, result.MatchedRejection, "expected MatchedRejection to be set")
+	assert.Equal(t, "too risky", result.MatchedRejection.Reason)
+	assert.Equal(t, "too risky", result.Reason)
 }
 
 func TestCheckFromAnnotations(t *testing.T) {
@@ -273,12 +256,8 @@ func TestCheckFromAnnotations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := CheckFromAnnotations(tt.approvals, tt.rejections, child, tt.parentGen)
-			if result.Approved != tt.wantApproved {
-				t.Errorf("Approved = %v, want %v", result.Approved, tt.wantApproved)
-			}
-			if result.Rejected != tt.wantRejected {
-				t.Errorf("Rejected = %v, want %v", result.Rejected, tt.wantRejected)
-			}
+			assert.Equal(t, tt.wantApproved, result.Approved)
+			assert.Equal(t, tt.wantRejected, result.Rejected)
 		})
 	}
 }

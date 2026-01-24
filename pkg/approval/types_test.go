@@ -2,6 +2,8 @@ package approval
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestApproval_Matches(t *testing.T) {
@@ -40,9 +42,7 @@ func TestApproval_Matches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := approval.Matches(tt.child); got != tt.want {
-				t.Errorf("Matches() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, approval.Matches(tt.child))
 		})
 	}
 }
@@ -129,9 +129,7 @@ func TestApproval_IsValid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.approval.IsValid(tt.parentGeneration); got != tt.want {
-				t.Errorf("IsValid(%d) = %v, want %v", tt.parentGeneration, got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.approval.IsValid(tt.parentGeneration))
 		})
 	}
 }
@@ -163,9 +161,7 @@ func TestRejection_Matches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := rejection.Matches(tt.child); got != tt.want {
-				t.Errorf("Matches() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, rejection.Matches(tt.child))
 		})
 	}
 }
@@ -205,9 +201,7 @@ func TestRejection_IsActive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.rejection.IsActive(tt.parentGeneration); got != tt.want {
-				t.Errorf("IsActive(%d) = %v, want %v", tt.parentGeneration, got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.rejection.IsActive(tt.parentGeneration))
 		})
 	}
 }
@@ -254,13 +248,12 @@ func TestParseApprovals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ParseApprovals(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseApprovals() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-			if len(got) != tt.wantLen {
-				t.Errorf("ParseApprovals() len = %d, want %d", len(got), tt.wantLen)
-			}
+			assert.NoError(t, err)
+			assert.Len(t, got, tt.wantLen)
 		})
 	}
 }
@@ -295,13 +288,12 @@ func TestParseRejections(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := ParseRejections(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseRejections() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-			if len(got) != tt.wantLen {
-				t.Errorf("ParseRejections() len = %d, want %d", len(got), tt.wantLen)
-			}
+			assert.NoError(t, err)
+			assert.Len(t, got, tt.wantLen)
 		})
 	}
 }
@@ -335,13 +327,12 @@ func TestMarshalApprovals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := MarshalApprovals(tt.approvals)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalApprovals() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-			if (got == "") != tt.wantEmpty {
-				t.Errorf("MarshalApprovals() empty = %v, wantEmpty %v", got == "", tt.wantEmpty)
-			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantEmpty, got == "", "empty check")
 		})
 	}
 }

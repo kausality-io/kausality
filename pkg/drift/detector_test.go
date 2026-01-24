@@ -1,9 +1,11 @@
 package drift
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -108,21 +110,13 @@ func TestDetectFromState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := detector.DetectFromState(tt.state)
-
-			if result.Allowed != tt.expectAllowed {
-				t.Errorf("Allowed = %v, want %v", result.Allowed, tt.expectAllowed)
+			assert.Equal(t, tt.expectAllowed, result.Allowed, "Allowed")
+			assert.Equal(t, tt.expectDrift, result.DriftDetected, "DriftDetected")
+			if tt.state != nil {
+				assert.Equal(t, tt.expectPhase, result.LifecyclePhase, "LifecyclePhase")
 			}
-
-			if result.DriftDetected != tt.expectDrift {
-				t.Errorf("DriftDetected = %v, want %v", result.DriftDetected, tt.expectDrift)
-			}
-
-			if tt.state != nil && result.LifecyclePhase != tt.expectPhase {
-				t.Errorf("LifecyclePhase = %v, want %v", result.LifecyclePhase, tt.expectPhase)
-			}
-
-			if tt.expectReasonMatch != "" && !containsString(result.Reason, tt.expectReasonMatch) {
-				t.Errorf("Reason = %q, want to contain %q", result.Reason, tt.expectReasonMatch)
+			if tt.expectReasonMatch != "" {
+				assert.Contains(t, result.Reason, tt.expectReasonMatch, "Reason")
 			}
 		})
 	}
@@ -210,13 +204,9 @@ func TestDetectFromStateWithFieldManager(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := detector.DetectFromStateWithFieldManager(tt.state, tt.fieldManager)
-
-			if result.DriftDetected != tt.expectDrift {
-				t.Errorf("DriftDetected = %v, want %v (reason: %s)", result.DriftDetected, tt.expectDrift, result.Reason)
-			}
-
-			if tt.expectReasonMatch != "" && !containsString(result.Reason, tt.expectReasonMatch) {
-				t.Errorf("Reason = %q, want to contain %q", result.Reason, tt.expectReasonMatch)
+			assert.Equal(t, tt.expectDrift, result.DriftDetected, "DriftDetected (reason: %s)", result.Reason)
+			if tt.expectReasonMatch != "" {
+				assert.Contains(t, result.Reason, tt.expectReasonMatch, "Reason")
 			}
 		})
 	}
@@ -305,9 +295,7 @@ func TestLifecycleDetector_DetectPhase(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			phase := detector.DetectPhase(tt.state)
-			if phase != tt.expect {
-				t.Errorf("DetectPhase() = %v, want %v", phase, tt.expect)
-			}
+			assert.Equal(t, tt.expect, phase)
 		})
 	}
 }
@@ -341,23 +329,11 @@ func TestParentRef_String(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.ref.String(); got != tt.expect {
-				t.Errorf("String() = %q, want %q", got, tt.expect)
-			}
+			assert.Equal(t, tt.expect, tt.ref.String())
 		})
 	}
 }
 
 func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }

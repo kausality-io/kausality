@@ -5,14 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestDefault(t *testing.T) {
 	cfg := Default()
-	if cfg.DriftDetection.DefaultMode != ModeLog {
-		t.Errorf("expected default mode %q, got %q", ModeLog, cfg.DriftDetection.DefaultMode)
-	}
+	assert.Equal(t, ModeLog, cfg.DriftDetection.DefaultMode)
 }
 
 func TestValidate(t *testing.T) {
@@ -117,8 +118,10 @@ func TestValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.config.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}
@@ -183,9 +186,7 @@ func TestGetModeForResource(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mode := cfg.GetModeForResource(tt.gvk)
-			if mode != tt.wantMode {
-				t.Errorf("GetModeForResource() = %v, want %v", mode, tt.wantMode)
-			}
+			assert.Equal(t, tt.wantMode, mode)
 		})
 	}
 }
@@ -224,22 +225,19 @@ func TestIsEnforceMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := cfg.IsEnforceMode(tt.gvk)
-			if got != tt.want {
-				t.Errorf("IsEnforceMode() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
 func TestLoad(t *testing.T) {
-	// Create a temp directory for test files
 	tempDir := t.TempDir()
 
 	tests := []struct {
-		name        string
-		content     string
-		wantErr     bool
-		wantMode    string
+		name          string
+		content       string
+		wantErr       bool
+		wantMode      string
 		wantOverrides int
 	}{
 		{
@@ -293,32 +291,23 @@ driftDetection:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(tempDir, tt.name+".yaml")
-			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
-				t.Fatalf("failed to write test file: %v", err)
-			}
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0644))
 
 			cfg, err := Load(path)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Load() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
 
-			if !tt.wantErr {
-				if cfg.DriftDetection.DefaultMode != tt.wantMode {
-					t.Errorf("DefaultMode = %v, want %v", cfg.DriftDetection.DefaultMode, tt.wantMode)
-				}
-				if len(cfg.DriftDetection.Overrides) != tt.wantOverrides {
-					t.Errorf("Overrides count = %v, want %v", len(cfg.DriftDetection.Overrides), tt.wantOverrides)
-				}
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMode, cfg.DriftDetection.DefaultMode)
+			assert.Len(t, cfg.DriftDetection.Overrides, tt.wantOverrides)
 		})
 	}
 
 	// Test file not found
 	_, err := Load("/nonexistent/path/config.yaml")
-	if err == nil {
-		t.Error("Load() should fail for nonexistent file")
-	}
+	assert.Error(t, err)
 }
 
 func TestOverrideMatches(t *testing.T) {
@@ -393,9 +382,7 @@ func TestOverrideMatches(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.override.Matches(tt.gvk)
-			if got != tt.want {
-				t.Errorf("Matches() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
