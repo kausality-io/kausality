@@ -38,6 +38,8 @@ else:
 
 **Why this works**: Controllers reconcile children based on their own spec. If the parent's spec hasn't changed (gen == obsGen), any child mutation is from drift.
 
+**Spec changes only**: Kausality only intercepts mutations to `spec`. Changes to `status` or `metadata` are ignored — no drift detection, no tracing, no approval required. Status updates are controllers reporting state, and metadata changes are typically administrative.
+
 **For Terraform (L0 controllers)**:
 - Check if plan is non-empty when generation == observedGeneration
 - Future: TerraformApprovalPolicy CRD for plan-based exceptions
