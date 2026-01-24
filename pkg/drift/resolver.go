@@ -1,6 +1,7 @@
 package drift
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -8,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/structured-merge-diff/v6/fieldpath"
 )
 
 // ParentResolver resolves the controller parent of a Kubernetes object.
@@ -85,6 +87,9 @@ func extractParentState(parent *unstructured.Unstructured, ownerRef metav1.Owner
 		state.Conditions = extractConditions(status)
 	}
 
+	// Find the controller manager from managedFields
+	state.ControllerManager = findControllerManager(parent.GetManagedFields())
+
 	// Check for deletion timestamp
 	if parent.GetDeletionTimestamp() != nil {
 		state.DeletionTimestamp = parent.GetDeletionTimestamp()
@@ -142,4 +147,35 @@ func ParentRefFromOwnerRef(ref metav1.OwnerReference, namespace string) ParentRe
 		Namespace:  namespace,
 		Name:       ref.Name,
 	}
+}
+
+// findControllerManager finds the manager that owns status.observedGeneration.
+// This identifies the controller that reconciles the object.
+func findControllerManager(managedFields []metav1.ManagedFieldsEntry) string {
+	// Path to status.observedGeneration
+	obsGenPath := fieldpath.MakePathOrDie("status", "observedGeneration")
+
+	for _, entry := range managedFields {
+		// Skip non-status updates
+		if entry.Subresource != "status" && entry.Subresource != "" {
+			continue
+		}
+
+		if entry.FieldsV1 == nil || len(entry.FieldsV1.Raw) == 0 {
+			continue
+		}
+
+		// Parse the field set
+		var set fieldpath.Set
+		if err := set.FromJSON(bytes.NewReader(entry.FieldsV1.Raw)); err != nil {
+			continue
+		}
+
+		// Check if this manager owns status.observedGeneration
+		if set.Has(obsGenPath) {
+			return entry.Manager
+		}
+	}
+
+	return ""
 }

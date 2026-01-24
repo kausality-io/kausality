@@ -37,9 +37,15 @@ type PropagationResult struct {
 }
 
 // Propagate determines the trace for a mutated object.
-// For origins (no parent or parent not reconciling), creates a new trace.
-// For controller hops, extends the parent's trace.
+// Deprecated: Use PropagateWithFieldManager for proper controller identification.
 func (p *Propagator) Propagate(ctx context.Context, obj client.Object, user string) (*PropagationResult, error) {
+	return p.PropagateWithFieldManager(ctx, obj, user, "")
+}
+
+// PropagateWithFieldManager determines the trace for a mutated object.
+// For origins (no parent, parent not reconciling, or different actor), creates a new trace.
+// For controller hops (same fieldManager as controller, parent reconciling), extends parent's trace.
+func (p *Propagator) PropagateWithFieldManager(ctx context.Context, obj client.Object, user string, fieldManager string) (*PropagationResult, error) {
 	// Resolve parent state
 	parentState, err := p.resolver.ResolveParent(ctx, obj)
 	if err != nil {
@@ -47,7 +53,7 @@ func (p *Propagator) Propagate(ctx context.Context, obj client.Object, user stri
 	}
 
 	// Determine if this is an origin or a hop
-	isOrigin := isOrigin(parentState)
+	isOrigin := p.isOrigin(parentState, fieldManager)
 
 	// Get GVK info
 	gvk := obj.GetObjectKind().GroupVersionKind()
@@ -86,7 +92,8 @@ func (p *Propagator) Propagate(ctx context.Context, obj client.Object, user stri
 // Origin conditions:
 // - No controller ownerReference
 // - Parent has generation == observedGeneration (not reconciling)
-func isOrigin(parentState *drift.ParentState) bool {
+// - Request fieldManager doesn't match parent's controller manager (different actor)
+func (p *Propagator) isOrigin(parentState *drift.ParentState, fieldManager string) bool {
 	// No parent = origin
 	if parentState == nil {
 		return true
@@ -97,7 +104,30 @@ func isOrigin(parentState *drift.ParentState) bool {
 		return true
 	}
 
+	// Check if request is from the controller
+	if !p.isControllerRequest(parentState, fieldManager) {
+		// Different actor = origin (even if parent is reconciling)
+		return true
+	}
+
+	// Controller is reconciling = hop (extend parent trace)
 	return false
+}
+
+// isControllerRequest checks if the request comes from the controller.
+func (p *Propagator) isControllerRequest(parentState *drift.ParentState, fieldManager string) bool {
+	// If we don't know the controller manager, fall back to assuming controller
+	if parentState.ControllerManager == "" {
+		return true
+	}
+
+	// If fieldManager is empty, fall back to assuming controller
+	if fieldManager == "" {
+		return true
+	}
+
+	// Compare field managers
+	return fieldManager == parentState.ControllerManager
 }
 
 // getParentTrace retrieves the trace from the parent object.

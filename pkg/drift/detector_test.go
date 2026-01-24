@@ -128,6 +128,100 @@ func TestDetectFromState(t *testing.T) {
 	}
 }
 
+func TestDetectFromStateWithFieldManager(t *testing.T) {
+	detector := &Detector{
+		lifecycleDetector: NewLifecycleDetector(),
+	}
+
+	tests := []struct {
+		name              string
+		state             *ParentState
+		fieldManager      string
+		expectDrift       bool
+		expectReasonMatch string
+	}{
+		{
+			name: "controller request - gen != obsGen - no drift",
+			state: &ParentState{
+				Ref:                   ParentRef{Kind: "Deployment", Name: "test"},
+				Generation:            5,
+				ObservedGeneration:    4,
+				HasObservedGeneration: true,
+				ControllerManager:     "my-controller",
+			},
+			fieldManager:      "my-controller",
+			expectDrift:       false,
+			expectReasonMatch: "expected change",
+		},
+		{
+			name: "controller request - gen == obsGen - drift",
+			state: &ParentState{
+				Ref:                   ParentRef{Kind: "Deployment", Name: "test"},
+				Generation:            5,
+				ObservedGeneration:    5,
+				HasObservedGeneration: true,
+				ControllerManager:     "my-controller",
+			},
+			fieldManager:      "my-controller",
+			expectDrift:       true,
+			expectReasonMatch: "drift detected: parent generation",
+		},
+		{
+			name: "different actor - drift (regardless of gen/obsGen)",
+			state: &ParentState{
+				Ref:                   ParentRef{Kind: "Deployment", Name: "test"},
+				Generation:            5,
+				ObservedGeneration:    4, // Parent is reconciling
+				HasObservedGeneration: true,
+				ControllerManager:     "my-controller",
+			},
+			fieldManager:      "other-actor",
+			expectDrift:       true,
+			expectReasonMatch: "request from",
+		},
+		{
+			name: "unknown controller - fallback assumes controller",
+			state: &ParentState{
+				Ref:                   ParentRef{Kind: "Deployment", Name: "test"},
+				Generation:            5,
+				ObservedGeneration:    4,
+				HasObservedGeneration: true,
+				ControllerManager:     "", // Unknown
+			},
+			fieldManager:      "any-manager",
+			expectDrift:       false,
+			expectReasonMatch: "expected change",
+		},
+		{
+			name: "empty fieldManager - fallback assumes controller",
+			state: &ParentState{
+				Ref:                   ParentRef{Kind: "Deployment", Name: "test"},
+				Generation:            5,
+				ObservedGeneration:    4,
+				HasObservedGeneration: true,
+				ControllerManager:     "my-controller",
+			},
+			fieldManager:      "",
+			expectDrift:       false,
+			expectReasonMatch: "expected change",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := detector.DetectFromStateWithFieldManager(tt.state, tt.fieldManager)
+
+			if result.DriftDetected != tt.expectDrift {
+				t.Errorf("DriftDetected = %v, want %v (reason: %s)", result.DriftDetected, tt.expectDrift, result.Reason)
+			}
+
+			if tt.expectReasonMatch != "" && !containsString(result.Reason, tt.expectReasonMatch) {
+				t.Errorf("Reason = %q, want to contain %q", result.Reason, tt.expectReasonMatch)
+			}
+		})
+	}
+}
+
 func TestLifecycleDetector_DetectPhase(t *testing.T) {
 	detector := NewLifecycleDetector()
 

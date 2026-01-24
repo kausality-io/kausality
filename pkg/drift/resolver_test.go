@@ -349,3 +349,87 @@ func TestParentRefFromOwnerRef(t *testing.T) {
 		t.Errorf("Namespace = %q, want %q", parentRef.Namespace, "my-namespace")
 	}
 }
+
+func TestFindControllerManager(t *testing.T) {
+	tests := []struct {
+		name          string
+		managedFields []metav1.ManagedFieldsEntry
+		wantManager   string
+	}{
+		{
+			name:          "no managed fields",
+			managedFields: nil,
+			wantManager:   "",
+		},
+		{
+			name: "manager owns status.observedGeneration",
+			managedFields: []metav1.ManagedFieldsEntry{
+				{
+					Manager:     "kube-controller-manager",
+					Operation:   metav1.ManagedFieldsOperationUpdate,
+					Subresource: "status",
+					FieldsV1: &metav1.FieldsV1{
+						Raw: []byte(`{"f:status":{"f:observedGeneration":{}}}`),
+					},
+				},
+			},
+			wantManager: "kube-controller-manager",
+		},
+		{
+			name: "multiple managers - one owns observedGeneration",
+			managedFields: []metav1.ManagedFieldsEntry{
+				{
+					Manager:   "kubectl",
+					Operation: metav1.ManagedFieldsOperationApply,
+					FieldsV1: &metav1.FieldsV1{
+						Raw: []byte(`{"f:spec":{"f:replicas":{}}}`),
+					},
+				},
+				{
+					Manager:     "capi-controller",
+					Operation:   metav1.ManagedFieldsOperationUpdate,
+					Subresource: "status",
+					FieldsV1: &metav1.FieldsV1{
+						Raw: []byte(`{"f:status":{"f:observedGeneration":{},"f:conditions":{}}}`),
+					},
+				},
+			},
+			wantManager: "capi-controller",
+		},
+		{
+			name: "manager owns status but not observedGeneration",
+			managedFields: []metav1.ManagedFieldsEntry{
+				{
+					Manager:     "some-controller",
+					Operation:   metav1.ManagedFieldsOperationUpdate,
+					Subresource: "status",
+					FieldsV1: &metav1.FieldsV1{
+						Raw: []byte(`{"f:status":{"f:conditions":{}}}`),
+					},
+				},
+			},
+			wantManager: "",
+		},
+		{
+			name: "empty fieldsV1",
+			managedFields: []metav1.ManagedFieldsEntry{
+				{
+					Manager:     "controller",
+					Operation:   metav1.ManagedFieldsOperationUpdate,
+					Subresource: "status",
+					FieldsV1:    nil,
+				},
+			},
+			wantManager: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findControllerManager(tt.managedFields)
+			if got != tt.wantManager {
+				t.Errorf("findControllerManager() = %q, want %q", got, tt.wantManager)
+			}
+		})
+	}
+}

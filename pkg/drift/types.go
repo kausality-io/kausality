@@ -49,6 +49,9 @@ type ParentState struct {
 	ObservedGeneration int64
 	// HasObservedGeneration indicates whether status.observedGeneration exists.
 	HasObservedGeneration bool
+	// ControllerManager is the manager that owns status.observedGeneration.
+	// This identifies the controller that reconciles this object.
+	ControllerManager string
 	// DeletionTimestamp is set if the parent is being deleted.
 	DeletionTimestamp *metav1.Time
 	// Conditions are the parent's status conditions for lifecycle detection.

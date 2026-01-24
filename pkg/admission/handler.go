@@ -82,8 +82,12 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to parse object: %w", err))
 	}
 
+	// Extract fieldManager for controller identification
+	fieldManager := extractFieldManager(req)
+	log = log.WithValues("fieldManager", fieldManager)
+
 	// Detect drift
-	driftResult, err := h.detector.Detect(ctx, obj)
+	driftResult, err := h.detector.DetectWithFieldManager(ctx, obj, fieldManager)
 	if err != nil {
 		log.Error(err, "drift detection failed")
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("drift detection failed: %w", err))
@@ -108,7 +112,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 
 	// Propagate trace
-	traceResult, err := h.propagator.Propagate(ctx, obj, req.UserInfo.Username)
+	traceResult, err := h.propagator.PropagateWithFieldManager(ctx, obj, req.UserInfo.Username, fieldManager)
 	if err != nil {
 		log.Error(err, "trace propagation failed")
 		// Don't fail the request on trace errors - just log and continue
@@ -277,4 +281,26 @@ func ValidatingWebhookFor(result *drift.DriftResult) admission.Response {
 			},
 		},
 	}
+}
+
+// extractFieldManager extracts the fieldManager from admission request options.
+func extractFieldManager(req admission.Request) string {
+	if len(req.Options.Raw) == 0 {
+		return ""
+	}
+
+	// Options is a RawExtension that can be CreateOptions, UpdateOptions, PatchOptions, or DeleteOptions
+	// All of them (except DeleteOptions) have a FieldManager field
+	// We'll parse as a generic map to extract fieldManager
+
+	var opts map[string]interface{}
+	if err := json.Unmarshal(req.Options.Raw, &opts); err != nil {
+		return ""
+	}
+
+	if fm, ok := opts["fieldManager"].(string); ok {
+		return fm
+	}
+
+	return ""
 }

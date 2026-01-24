@@ -42,7 +42,14 @@ func NewDetectorWithOptions(c client.Client, opts ...DetectorOption) *Detector {
 
 // Detect checks whether a mutation to the given object would be considered drift.
 // It resolves the controller parent and compares generation with observedGeneration.
+// Deprecated: Use DetectWithFieldManager for proper controller identification.
 func (d *Detector) Detect(ctx context.Context, obj client.Object) (*DriftResult, error) {
+	return d.DetectWithFieldManager(ctx, obj, "")
+}
+
+// DetectWithFieldManager checks whether a mutation would be considered drift.
+// It uses the fieldManager to identify if the request comes from the controller.
+func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object, fieldManager string) (*DriftResult, error) {
 	// Resolve parent
 	parentState, err := d.resolver.ResolveParent(ctx, obj)
 	if err != nil {
@@ -84,7 +91,19 @@ func (d *Detector) Detect(ctx context.Context, obj client.Object) (*DriftResult,
 		// Fall through to drift detection
 	}
 
-	// Core drift detection: compare generation vs observedGeneration
+	// Check if request comes from the controller
+	isController := d.isControllerRequest(parentState, fieldManager)
+
+	if !isController {
+		// Different actor - this is drift (or a new origin for tracing)
+		result.Allowed = true // Phase 1: logging only, always allow
+		result.DriftDetected = true
+		result.Reason = fmt.Sprintf("drift detected: request from %q, controller is %q",
+			fieldManager, parentState.ControllerManager)
+		return result, nil
+	}
+
+	// Request is from the controller - check generation vs observedGeneration
 	if parentState.Generation != parentState.ObservedGeneration {
 		// Parent spec changed - expected change
 		result.Allowed = true
@@ -94,7 +113,7 @@ func (d *Detector) Detect(ctx context.Context, obj client.Object) (*DriftResult,
 		return result, nil
 	}
 
-	// Drift detected: generation == observedGeneration but child is being mutated
+	// Controller is updating but parent hasn't changed - drift
 	result.Allowed = true // Phase 1: logging only, always allow
 	result.DriftDetected = true
 	result.Reason = fmt.Sprintf("drift detected: parent generation (%d) == observedGeneration (%d)",
@@ -103,9 +122,34 @@ func (d *Detector) Detect(ctx context.Context, obj client.Object) (*DriftResult,
 	return result, nil
 }
 
+// isControllerRequest checks if the request comes from the controller.
+func (d *Detector) isControllerRequest(parentState *ParentState, fieldManager string) bool {
+	// If we don't know the controller manager, fall back to assuming controller
+	// This handles cases where parent doesn't have managedFields (older objects)
+	// or we can't determine the controller
+	if parentState.ControllerManager == "" {
+		return true
+	}
+
+	// If fieldManager is empty, we can't determine the requester
+	// Fall back to assuming controller for backwards compatibility
+	if fieldManager == "" {
+		return true
+	}
+
+	// Compare field managers
+	return fieldManager == parentState.ControllerManager
+}
+
 // DetectFromState checks for drift given an already-resolved parent state.
 // This is useful when the parent state is already available.
+// Deprecated: Use DetectFromStateWithFieldManager for proper controller identification.
 func (d *Detector) DetectFromState(parentState *ParentState) *DriftResult {
+	return d.DetectFromStateWithFieldManager(parentState, "")
+}
+
+// DetectFromStateWithFieldManager checks for drift given parent state and fieldManager.
+func (d *Detector) DetectFromStateWithFieldManager(parentState *ParentState, fieldManager string) *DriftResult {
 	// No parent state - allow
 	if parentState == nil {
 		return &DriftResult{
@@ -136,6 +180,18 @@ func (d *Detector) DetectFromState(parentState *ParentState) *DriftResult {
 
 	case PhaseReady:
 		// Fall through to drift detection
+	}
+
+	// Check if request comes from the controller
+	isController := d.isControllerRequest(parentState, fieldManager)
+
+	if !isController {
+		// Different actor - this is drift
+		result.Allowed = true // Phase 1: logging only
+		result.DriftDetected = true
+		result.Reason = fmt.Sprintf("drift detected: request from %q, controller is %q",
+			fieldManager, parentState.ControllerManager)
+		return result
 	}
 
 	// Core drift detection
