@@ -10,7 +10,7 @@ metadata:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "kausality.certificateSecretName" . }}
   {{- end }}
 webhooks:
-  - name: kausality.io
+  - name: mutating.webhook.kausality.io
     admissionReviewVersions: ["v1"]
     sideEffects: NoneOnDryRun
     reinvocationPolicy: IfNeeded
