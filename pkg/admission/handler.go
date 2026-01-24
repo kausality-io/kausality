@@ -17,17 +17,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/kausality-io/kausality/pkg/approval"
 	"github.com/kausality-io/kausality/pkg/drift"
 	"github.com/kausality-io/kausality/pkg/trace"
 )
 
 // Handler handles admission requests for drift detection and tracing.
 type Handler struct {
-	client     client.Client
-	decoder    admission.Decoder
-	detector   *drift.Detector
-	propagator *trace.Propagator
-	log        logr.Logger
+	client          client.Client
+	decoder         admission.Decoder
+	detector        *drift.Detector
+	propagator      *trace.Propagator
+	approvalChecker *approval.Checker
+	log             logr.Logger
 }
 
 // Config configures the admission handler.
@@ -39,10 +41,11 @@ type Config struct {
 // NewHandler creates a new admission Handler.
 func NewHandler(cfg Config) *Handler {
 	return &Handler{
-		client:     cfg.Client,
-		detector:   drift.NewDetector(cfg.Client),
-		propagator: trace.NewPropagator(cfg.Client),
-		log:        cfg.Log.WithName("kausality-admission"),
+		client:          cfg.Client,
+		detector:        drift.NewDetector(cfg.Client),
+		propagator:      trace.NewPropagator(cfg.Client),
+		approvalChecker: approval.NewChecker(),
+		log:             cfg.Log.WithName("kausality-admission"),
 	}
 }
 
@@ -106,7 +109,21 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 
 	if driftResult.DriftDetected {
-		log.Info("DRIFT DETECTED - would be blocked in enforcement mode", logFields...)
+		// Check for approvals when drift is detected
+		approvalResult := h.checkApprovals(ctx, driftResult, obj, log)
+		logFields = append(logFields,
+			"approved", approvalResult.Approved,
+			"rejected", approvalResult.Rejected,
+		)
+
+		if approvalResult.Rejected {
+			log.Info("DRIFT REJECTED", append(logFields, "rejectReason", approvalResult.Reason)...)
+			// Phase 1: still allow but log - in enforce mode this would deny
+		} else if approvalResult.Approved {
+			log.Info("DRIFT APPROVED", append(logFields, "approvalReason", approvalResult.Reason)...)
+		} else {
+			log.Info("DRIFT DETECTED - no approval found", logFields...)
+		}
 	} else {
 		log.V(1).Info("drift check passed", logFields...)
 	}
@@ -281,6 +298,57 @@ func ValidatingWebhookFor(result *drift.DriftResult) admission.Response {
 			},
 		},
 	}
+}
+
+// checkApprovals checks if the drift is approved or rejected.
+func (h *Handler) checkApprovals(ctx context.Context, driftResult *drift.DriftResult, obj client.Object, log logr.Logger) approval.CheckResult {
+	if driftResult.ParentRef == nil {
+		return approval.CheckResult{Reason: "no parent to check approvals on"}
+	}
+
+	// Fetch parent object to read approval annotations
+	parent, err := h.fetchParent(ctx, driftResult.ParentRef, obj.GetNamespace())
+	if err != nil {
+		log.Error(err, "failed to fetch parent for approval check")
+		return approval.CheckResult{Reason: "failed to fetch parent: " + err.Error()}
+	}
+
+	// Build child reference
+	gvk := obj.GetObjectKind().GroupVersionKind()
+	childRef := approval.ChildRef{
+		APIVersion: gvk.GroupVersion().String(),
+		Kind:       gvk.Kind,
+		Name:       obj.GetName(),
+	}
+
+	// Check approvals on parent
+	return h.approvalChecker.Check(parent, childRef, parent.GetGeneration())
+}
+
+// fetchParent fetches the parent object by reference.
+func (h *Handler) fetchParent(ctx context.Context, ref *drift.ParentRef, childNamespace string) (client.Object, error) {
+	gv, err := schema.ParseGroupVersion(ref.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("invalid parent API version: %w", err)
+	}
+
+	parent := &unstructured.Unstructured{}
+	parent.SetGroupVersionKind(gv.WithKind(ref.Kind))
+
+	key := client.ObjectKey{
+		Namespace: ref.Namespace,
+		Name:      ref.Name,
+	}
+	// If parent namespace is empty but child has namespace, use child's namespace
+	if key.Namespace == "" && childNamespace != "" {
+		key.Namespace = childNamespace
+	}
+
+	if err := h.client.Get(ctx, key, parent); err != nil {
+		return nil, err
+	}
+
+	return parent, nil
 }
 
 // extractFieldManager extracts the fieldManager from admission request options.
