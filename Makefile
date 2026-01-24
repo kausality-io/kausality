@@ -1,4 +1,4 @@
-# Kausality - Drift detection for Kubernetes controllers
+# Kausality - Causal traceability for Kubernetes resource mutations
 
 # Image URL to use all building/pushing image targets
 IMG ?= ghcr.io/kausality-io/kausality:latest

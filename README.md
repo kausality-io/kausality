@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Drift detection for Kubernetes controllers</strong>
+  <strong>Causal traceability for Kubernetes resource mutations</strong>
 </p>
 
 <p align="center">

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: kausality
-description: Drift detection for Kubernetes controllers
+description: Causal traceability for Kubernetes resource mutations
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
