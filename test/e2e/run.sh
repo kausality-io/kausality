@@ -338,6 +338,17 @@ assert "Webhook processed admission requests" "[[ ${ADMISSION_COUNT} -gt 0 ]]"
 # ==========================================
 # Summary
 # ==========================================
+# Run Go E2E Tests
+# ==========================================
+log ""
+log "=========================================="
+log "Running Go E2E Tests"
+log "=========================================="
+
+cd "${ROOT_DIR}"
+go test -tags=e2e ./test/e2e/kubernetes -v -timeout 5m
+
+# ==========================================
 log ""
 log "=========================================="
 log "E2E Test Summary"

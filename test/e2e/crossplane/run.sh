@@ -335,6 +335,17 @@ assert "Provider is installed" "[[ '${INSTALLED}' == 'True' ]]"
 assert "Provider is healthy" "[[ '${HEALTHY}' == 'True' ]]"
 
 # ==========================================
+# Run Go E2E Tests
+# ==========================================
+log ""
+log "=========================================="
+log "Running Go E2E Tests (Crossplane)"
+log "=========================================="
+
+cd "${ROOT_DIR}"
+go test -tags=e2e ./test/e2e/crossplane -v -timeout 5m
+
+# ==========================================
 # Summary
 # ==========================================
 log ""
