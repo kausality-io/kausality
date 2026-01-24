@@ -1,1056 +1,473 @@
-# Kausality
+# Drift Detection and Escalation
 
-A system for tracing and gating spec changes through a hierarchy of KRM objects and downstream systems (e.g., Terraform). Controllers cannot mutate downstream unless explicitly allowed.
+**Simplified Design — Admission-Only**
 
-## Goals
+## Context
 
-**This is about safety, not security.**
+Controllers reconcile infrastructure by applying changes to downstream Kubernetes objects and Terraform. Currently, there is no mechanism to distinguish between:
+- **Expected changes**: Triggered by spec changes (generation != observedGeneration)
+- **Unexpected changes**: Triggered by drift, external modifications, or software updates when generation == observedGeneration
 
-We want a best-effort system that stays out of the way of the user, but enables:
-- Traceability of destructive actions
-- Avoidance of accidental damage where possible
+Unexpected changes can cause infrastructure modifications without explicit intent, creating operational risk. Examples include:
+- External modifications to cloud resources (drift)
+- Updates to referenced resources (ClusterRelease, MachineClass)
+- Controller behavior changes from software updates
 
-The system assumes good intent. It protects against accidents, not malicious actors.
+## Design
 
-## Core Concepts
+Implement an **admission-only** change detection and approval system that:
+1. Detects unexpected changes by checking parent state at admission time
+2. Blocks unexpected changes until explicitly approved or matching an exception policy
+3. Escalates to Slack for human (or AI) approval
+4. Tracks request provenance through the resource hierarchy
 
-### Allowance
+**Key constraint**: No controller modifications required. All logic runs in admission.
 
-A permission for a controller to perform a specific mutation on a child object.
+### Detection Mechanism
 
-- Stored in parent object's annotations, protected by admission
-- Additive: allowances accumulate without conflict
-- Carries causation trace back to origin (the initiator)
+When a controller mutates a child object, admission intercepts and checks the **parent's** state:
 
-### AllowancePolicy
+```
+parent := resolve via controller ownerReference (controller: true)
 
-A CRD defining rules that map parent field changes to permitted child mutations. Evaluated by the admission webhook.
-
-## Allowance Storage
-
-Allowances are stored in annotations to remain controller-agnostic:
-
-```yaml
-kind: Deployment
-metadata:
-  annotations:
-    kausality.io/allowances: |
-      - kind: ReplicaSet           # child kind the controller may mutate
-        mutation: spec.replicas    # field the controller may change on child
-        generation: 7              # generation of this object that caused it
-        initiator: hans@example.com  # human/CI that started the chain
-        trace:                     # causation path to this point
-        - kind: Deployment
-          name: foo
-          generation: 7
-          field: spec.replicas     # field change that triggered this
+if parent.generation != parent.status.observedGeneration:
+    # Parent spec changed → expected change → ALLOW
+else:
+    # Parent spec unchanged → drift → check approvals
 ```
 
-Propagated to child (ReplicaSet allows Pod mutations):
+**Why this works**: Controllers reconcile children based on their own spec. If the parent's spec hasn't changed (gen == obsGen), any child mutation is from drift.
+
+**For Terraform (L0 controllers)**:
+- Check if plan is non-empty when generation == observedGeneration
+- Future: TerraformApprovalPolicy CRD for plan-based exceptions
+
+### Approval and Rejection Annotations
 
 ```yaml
-kind: ReplicaSet
+# On parent resource (e.g., EKSCluster)
 metadata:
   annotations:
-    kausality.io/allowances: |
-      - kind: Pod                  # child kind the controller may mutate
-        mutation: delete           # operation permitted on child
-        generation: 14             # generation of this object that caused it
-        initiator: hans@example.com
-        trace:
-        - kind: Deployment
-          name: foo
-          generation: 7
-          field: spec.replicas
-        - kind: ReplicaSet         # this object, appended by admission
-          name: foo-abc
-          generation: 14
-          field: spec.replicas
+    kausality.io/approvals: |
+      [
+        {
+          "apiVersion": "v1",
+          "kind": "ConfigMap",
+          "name": "bar",
+          "generation": 5,
+          "mode": "once"
+        },
+        {
+          "apiVersion": "v1",
+          "kind": "Secret",
+          "name": "credentials",
+          "mode": "always"
+        }
+      ]
+    kausality.io/rejections: |
+      [
+        {
+          "apiVersion": "example.com/v1alpha1",
+          "kind": "NodePool",
+          "name": "pool-1",
+          "generation": 5,
+          "reason": "Destructive change, needs SRE review"
+        }
+      ]
+    kausality.io/request-trace: "ace-123,cluster-456"
 ```
 
-### Trace
+- Namespace is implicit (same as parent) — only applies to namespaced resources
+- `generation` field is only required for `once` and `generation` modes, not for `always`
+- Admission plugin prunes approvals when parent generation changes
 
-The trace is a linear causation path from initiator to current object.
+### Approval Modes
 
-- **Linearity**: When multiple allowances could justify a mutation, one is chosen deterministically (e.g., alphabetic by `{kind}/{name}/{field}`)
-- **Initiator**: The human or CI system that started the chain (only captured once, at the top level)
-- **Hops**: Each intermediate object that propagated the allowance
-- **Field**: Full JSON path including concrete indices (e.g., `spec.template.spec.containers[0].image`)
-- **Attestations**: Optional captured values from the object (e.g., Jira ticket)
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `once` | Removed after first allowed mutation | One-time drift fix, strict control |
+| `generation` | Valid while `parent.generation == approval.generation` | Approve for current state, invalidate on spec change |
+| `always` | Permanent, never automatically pruned | Known-safe pattern, permanent exception |
 
-Namespace is omitted from trace hops — it's always the same as the object carrying the allowance (or cluster-scoped).
+### Approval Validity
 
-#### Attestations (Optional Extension)
+An approval is valid when:
+1. `approval.apiVersion/kind/name` matches the child being mutated
+2. Mode-specific:
+   - `once`: not yet consumed AND `approval.generation == parent.generation`
+   - `generation`: `approval.generation == parent.generation`
+   - `always`: always valid
 
-Traces can capture external references as proof:
+### Pruning Rules
+
+| Trigger | Effect |
+|---------|--------|
+| Parent generation changes | `once` and `generation` approvals with `generation < parent.generation` are pruned |
+| Approval used (`mode: once`) | That specific approval is removed |
+| `mode: always` | Never pruned automatically (explicit removal required) |
+
+### Freeze and Snooze
+
+Additional parent annotations for operational control:
 
 ```yaml
-kind: Deployment
 metadata:
   annotations:
-    kausality.io/allowances: |
-      - kind: ReplicaSet
-        mutation: spec.replicas
-        generation: 7
-        initiator: hans@example.com
-        trace:
-        - kind: Deployment
-          name: foo
-          generation: 7
-          field: spec.replicas
-          attestations:                              # captured values
-            "metadata.annotations[jira]": "INFRA-23232"
-            "metadata.annotations[approved-by]": "alice@example.com"
+    kausality.io/freeze: "true"                        # Block ALL changes
+    kausality.io/snooze-until: "2026-01-25T00:00:00Z"  # Suppress escalation
 ```
 
-The AllowancePolicy specifies which fields to capture via `capture` in each rule:
+| Annotation | Effect |
+|------------|--------|
+| `freeze: "true"` | Block ALL child mutations, even expected changes (parent spec change). Emergency lockdown. |
+| `snooze-until: <timestamp>` | Block drift but don't escalate to Slack until timestamp. Suppresses notifications, not permissions. |
+
+### Lifecycle Phases
+
+#### Initialization
+
+During initialization, all child changes are allowed (including CREATE). Detection priority (default, configurable per GVK):
+
+1. `Initialized=True` condition exists
+2. `Ready=True` condition exists (with persistence — see below)
+3. `status.observedGeneration` exists
+
+Once initialized, admission stores:
+```yaml
+kausality.io/initialized: "true"
+```
+
+This persists the initialized state for resources with flapping conditions (e.g., Crossplane Ready).
+
+#### Deletion
+
+When parent has `metadata.deletionTimestamp`:
+- Allow ALL child mutations (cleanup phase)
+- No drift checks, no approvals needed
+
+### Operations by Type
+
+| Operation | Drift Rules |
+|-----------|-------------|
+| CREATE | Allowed during initialization. Blocked during drift (requires approval). |
+| UPDATE | Blocked during drift unless approved. |
+| DELETE | Blocked during drift unless approved (same as UPDATE). |
+
+### ApprovalPolicy CRD
+
+For pattern-based exceptions (reduce per-object approval burden):
 
 ```yaml
+apiVersion: kausality.io/v1alpha1
+kind: ApprovalPolicy
+metadata:
+  name: controller-l1-compute   # typically matches SA name
+  namespace: infra
 spec:
   rules:
-  - trigger: "spec.replicas"
-    conditions:
-    - "has(object.metadata.annotations['jira'])"
-    capture:                                         # fields to store in trace
-    - "metadata.annotations[jira]"
-    - "metadata.annotations[approved-by]"
-    policies:
-    - ...
+  - apiVersion: "v1"
+    kind: "ConfigMap"
+    namespace: "*"
+    name: "*"
+    prereqs:                    # CEL on old object
+      cel: "object.metadata.labels['env'] == 'dev'"
+    match:                      # CEL/regexp on new object
+      regexp: '{"data":{"version":".*"}}'
+    mode: "always"
+    expiry: "2026-06-01T00:00:00Z"
 ```
 
-- `conditions` validates the field exists or matches a pattern
-- `capture` stores the actual value in the trace
+- Namespace-scoped in controller namespace
+- Named by controller's service account
+- Supports wildcards for namespace/name
+- Future: ClusterApprovalPolicy for cluster-wide rules
 
-The trace becomes self-documenting — auditable without looking up external systems.
-
-### Consumption
-
-Allowances are consumed based on `status.observedGeneration`:
-
-- If `status.observedGeneration >= allowance.generation` → allowance is consumed
-- Consumed allowances can be pruned by the next admission
-
-This leverages existing controller behavior — no changes required to controllers.
-
-## AllowancePolicy
+### Request Tracing
 
 ```yaml
-kind: AllowancePolicy
-apiVersion: kausality.io/v1alpha1
+# Initialized by admission, propagated down
+kausality.io/request-trace: "ace-123,cluster-456,ekscluster-789"
+kausality.io/jira-issue: "NGCC-1234"  # optional, passed through
+```
+
+- Auto-generated at admission if not present
+- **Replaced** when parent generation changes (new causal chain)
+- **Extended** with drift approval info when drift is corrected
+- Auxiliary fields (jira-issue) passed through unchanged
+
+### Slack Escalation
+
+When unexpected change detected and no approval/policy match:
+1. Post to Slack channel with:
+   - Object reference (kind, namespace, name)
+   - Diff of old vs new object
+   - Request trace for context
+   - Buttons: Approve, Reject, Add Exception
+2. "Add Exception" opens dialog to create ApprovalPolicy rule
+3. Approval/rejection updates the annotation via Slack bot
+
+### Admission Flow
+
+```
+1. Receive child CREATE/UPDATE/DELETE (oldObject, object, userInfo)
+2. Resolve parent via controller ownerReference (controller: true)
+
+3. Check lifecycle phases (short-circuit):
+   a. If parent has deletionTimestamp → ALLOW (deletion cleanup)
+   b. If parent not initialized → ALLOW (initialization phase)
+   c. If parent has freeze annotation → DENY (frozen)
+
+4. If parent.generation != parent.status.observedGeneration:
+     → Expected change (includes CREATE/UPDATE/DELETE), ALLOW
+     → Replace child trace with new chain from parent
+
+5. Else (drift case — applies to CREATE/UPDATE/DELETE):
+     a. Check kausality.io/rejections for matching child
+        → If rejected: DENY with reason
+     b. Check kausality.io/approvals for matching child
+        → If approved:
+            - Extend trace with drift approval info
+            - If mode=once: remove approval, ALLOW
+            - If mode=generation: ALLOW (pruned on next gen change)
+            - If mode=always: ALLOW
+     c. Check ApprovalPolicy rules for pattern match
+        → If policy matches: ALLOW
+     d. Else:
+        - If parent has snooze-until and not expired → DENY (no escalation)
+        - Else → DENY and escalate to Slack
+```
+
+### Response Codes
+
+| Outcome | Response |
+|---------|----------|
+| Parent deleting | `allowed: true` |
+| Parent initializing | `allowed: true` |
+| Parent frozen | `allowed: false`, status 403 Forbidden, reason: frozen |
+| Expected change (gen != obsGen) | `allowed: true` |
+| Drift with valid approval | `allowed: true` |
+| Drift with ApprovalPolicy match | `allowed: true` |
+| Drift rejected (explicit rejection) | `allowed: false`, status 403 Forbidden, reason from rejection |
+| Drift snoozed (no escalation) | `allowed: false`, status 403 Forbidden, no Slack notification |
+| Drift without approval (blocked) | `allowed: false`, status 403 Forbidden, escalate to Slack |
+| Parent not found | `allowed: false`, status 422 Unprocessable |
+
+## Deployment Modes
+
+The core logic is implemented as a **Go library** that can be consumed in two ways.
+
+### Library Import (Generic Control Plane)
+
+```go
+import "github.com/sttts/kausality/pkg/admission"
+
+// In apiserver setup
+admissionHandler := admission.NewHandler(admission.Config{
+    Client:        client,
+    PolicyLister:  policyInformer.Lister(),
+    // ...
+})
+
+// Register as admission plugin
+server.RegisterAdmission(admissionHandler)
+```
+
+- Embedded directly in custom apiserver (k8s.io/apiserver)
+- No network latency, no webhook overhead
+- ApprovalPolicy CRD served by same apiserver
+- Resource targeting is handled by which admission plugins are registered for which resources
+
+### Webhook Server (Stock Kubernetes)
+
+```go
+import "github.com/sttts/kausality/pkg/webhook"
+
+// Standalone webhook server
+server := webhook.NewServer(webhook.Config{
+    Client:       client,
+    PolicyLister: policyInformer.Lister(),
+    CertDir:      "/etc/webhook/certs",
+    // ...
+})
+server.Run()
+```
+
+- Deployed as separate service
+- Configured via ValidatingWebhookConfiguration / MutatingWebhookConfiguration
+- Helm chart handles webhook registration
+- ValidatingAdmissionPolicy (CEL) for simple fast-path checks:
+  - `object.metadata.generation == object.status.observedGeneration` → drift candidate
+  - `has(object.metadata.deletionTimestamp)` → deletion phase
+
+### Resource Targeting
+
+Which resources are subject to drift detection is **deployment configuration**, not core logic.
+
+#### Configuration Model
+
+```yaml
+# For webhook: part of WebhookConfiguration
+# For library: passed to admission.Config
+resourceRules:
+  # Include by API group
+  - apiGroups: ["apps"]
+    resources: ["*"]
+
+  # Include specific resources
+  - apiGroups: ["example.com"]
+    resources: ["ekscluster", "nodepools"]
+
+  # Exclude specific resources
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    exclude: true
+```
+
+#### Webhook Configuration (Helm)
+
+For stock Kubernetes, the Helm chart generates WebhookConfiguration:
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
 metadata:
-  name: deployment-policy
-spec:
-  for:
-    apiVersion: apps/v1
-    kind: Deployment
-
-  subjects:
-  - kind: Group
-    name: platform-team
-    mayInitiate: true
-  - kind: ServiceAccount
-    name: deployment-controller
-    namespace: kube-system
-
-  # Policies during initialization (omit or empty = unrestricted)
-  initializing:
-    when: "!has(object.status.observedGeneration)"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: replicasets
-      relation: ControllerChild
-      verbs: [Create]
-      mutations:
-      - jsonPath: "*"
-        verbs: [Insert, Mutate]
-
-  # Policies during deletion (omit or empty = unrestricted)
-  deleting:
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: replicasets
-      relation: ControllerChild
-      verbs: ["*"]
-
-  # Steady-state rules (trigger → policies mappings)
+  name: kausality-drift-detection
+webhooks:
+- name: drift.kausality.io
   rules:
-  - trigger: "spec.replicas"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: replicasets
-      relation: ControllerChild
-      verbs: [Update, Delete]
-      mutations:
-      - jsonPath: "spec.replicas"
-        verbs: [Mutate]
-
-  - trigger: "spec.template.spec.containers[*].image"
-    conditions:
-    - "object.metadata.labels['env'] != 'prod'"
-    - "has(object.metadata.annotations['jira'])"
-    capture:
-    - "metadata.annotations[jira]"
-    - "metadata.annotations[approved-by]"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: replicasets
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "spec.template.spec.containers[*]"
-        verbs: [Insert, Delete, Mutate]
-    - target:
-        external:
-          provider: aws
-          service: rds
-      relation: External
-      verbs: [Update, Delete, Create]
+  - apiGroups: ["apps", "example.com"]
+    apiVersions: ["*"]
+    resources: ["deployments", "ekscluster", "nodepools"]
+    operations: ["CREATE", "UPDATE", "DELETE"]
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values: ["kube-system", "kube-public"]
 ```
 
-### Simplified Example
-
-A schema-less policy that bounds children on any spec change, without enumerating field-level mutations:
-
+Helm values:
 ```yaml
-kind: AllowancePolicy
-apiVersion: kausality.io/v1alpha1
-metadata:
-  name: deployment-policy-simple
-spec:
-  for:
-    apiVersion: apps/v1
-    kind: Deployment
+resourceRules:
+  include:
+  - apiGroups: ["apps"]
+    resources: ["*"]
+  - apiGroups: ["example.com"]
+    resources: ["ekscluster", "nodepools"]
+  exclude:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
 
-  subjects:
-  - kind: ServiceAccount
-    name: deployment-controller
-    namespace: kube-system
-    mayInitiate: true
-
-  initializing:
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: replicasets
-      relation: ControllerChild
-      verbs: [Create]
-
-  deleting:
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: replicasets
-      relation: ControllerChild
-      verbs: ["*"]
-
-  rules:
-  - trigger: "spec"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: replicasets
-      relation: ControllerChild
-      verbs: ["*"]
+excludeNamespaces:
+  - kube-system
+  - kube-public
 ```
 
-This says:
-- **`trigger: "spec"`** — any change under `spec` triggers the rule
-- **`verbs: ["*"]`** — Create, Update, Delete all permitted for replicasets
-- **No `mutations`** — all field mutations allowed when `verbs` includes `Update`
+#### Library Configuration (Generic Control Plane)
 
-The effect: replicasets are bounded (tracked) but can be freely mutated when the parent spec changes. Other child types (not mentioned) are unrestricted.
+For generic control plane, resource targeting is typically hard-coded or loaded from config:
 
-### for
-
-The object kind this policy applies to (follows ObjectReference pattern):
-
-| Field | Description |
-|-------|-------------|
-| `apiVersion` | API version including group (e.g., `apps/v1`, `crossplane.io/v1alpha1`) |
-| `kind` | Object kind (singular, CamelCase, e.g., `Deployment`, `ReplicaSet`) |
-
-### subjects
-
-Who may trigger this policy. Follows RBAC subject conventions.
-
-| Field | Description |
-|-------|-------------|
-| `kind` | `User`, `Group`, or `ServiceAccount` |
-| `name` | Subject name |
-| `namespace` | For ServiceAccount only |
-| `mayInitiate` | If `true`, can start a new allowance chain (not just propagate) |
-
-Subjects without `mayInitiate` can only propagate allowances that already exist on a parent object.
-
-### initializing
-
-Upper bounds during initialization (before first successful reconcile).
-
-| Field | Description |
-|-------|-------------|
-| `when` | CEL expression, true = still initializing. Default: `"!has(object.status.observedGeneration)"` |
-| `policies` | List of policy entries bounding operations during initialization |
-
-If `policies` is omitted or empty, initialization is unrestricted.
-
-### deleting
-
-Upper bounds when parent has `deletionTimestamp`.
-
-| Field | Description |
-|-------|-------------|
-| `policies` | List of policy entries bounding operations during deletion |
-
-If `policies` is omitted or empty, deletion is unrestricted.
-
-### rules
-
-List of trigger → policies mappings for steady state. Each rule defines upper bounds for downstream operations when a specific field changes.
-
-| Field | Description |
-|-------|-------------|
-| `trigger` | JSON path of the field that triggers this rule (supports `[*]` wildcards) |
-| `conditions` | CEL expressions that must all pass (optional) |
-| `capture` | Fields to capture in the trace as attestations (optional) |
-| `policies` | List of policy entries bounding downstream operations |
-
-If `policies` is omitted or empty for a rule, that trigger allows unrestricted downstream operations.
-
-CEL expressions have access to `object` and `oldObject`. Use cases:
-- Require external references: `has(object.metadata.annotations['jira'])`
-- Pattern validation: `object.metadata.annotations['jira'].matches('^INFRA-[0-9]+$')`
-- Conditional requirements: `object.metadata.labels['env'] != 'prod'`
-- Change direction: `object.spec.replicas > oldObject.spec.replicas`
-
-Wildcards in trigger paths (e.g., `[*]`) match any index; traces record the actual index.
-
-### policies
-
-Each entry in `policies` defines an upper bound for a specific target GVR:
-
-| Field | Description |
-|-------|-------------|
-| `target` | Target (required) — GVR for `ControllerChild`, or `external` map for `External` |
-| `relation` | `ControllerChild` or `External` |
-| `verbs` | Object-level operations allowed |
-| `mutations` | Field-level operations allowed (only for `ControllerChild`) |
-
-**Upper-bound semantics:**
-- For each GVR, collect all policy entries that match it
-- The union of those entries is the upper bound for that GVR
-- GVRs not mentioned in any policy entry are **unrestricted**
-- `policies: []` (empty) means nothing is restricted → everything unrestricted
-
-**`target` is required.** Without a target, a policy entry doesn't restrict anything.
-
-For `ControllerChild`, target follows ObjectReference pattern with `resource` instead of `kind`:
-
-| Field | Description |
-|-------|-------------|
-| `apiVersion` | API version including group (e.g., `apps/v1`, `crossplane.io/v1alpha1`) |
-| `resource` | Resource name (plural, lowercase, e.g., `deployments`, `replicasets`) |
-
-For `External`, target uses a free-form map:
-
-| Field | Description |
-|-------|-------------|
-| `external` | `map[string]string` — provider-specific identifier |
-
-### verbs (object-level)
-
-For `ControllerChild`:
-- `Create` — create the KRM object
-- `Update` — update the KRM object (requires `mutations` to specify which fields)
-- `Delete` — delete the KRM object
-- `"*"` — all of the above
-
-For `External`:
-- Provider-specific verbs (e.g., Crossplane: `Create`, `Update`, `Delete`; Terraform: `apply`, `destroy`)
-- `"*"` — all operations
-
-### mutations (field-level)
-
-Only for `relation: ControllerChild`. Specifies which fields may be mutated when `verbs` includes `Update`.
-
-| Field | Description |
-|-------|-------------|
-| `jsonPath` | Path to the field that may be mutated (use `"*"` for any field) |
-| `verbs` | `Insert`, `Delete`, `Mutate` |
-
-- `Insert` — add new items (arrays/maps)
-- `Delete` — remove items from arrays/maps or remove the field
-- `Mutate` — change existing values
-
-If `mutations` is omitted and `verbs` includes `Update`, all field mutations are allowed.
-
-### target.external
-
-Only for `relation: External`. Free-form `map[string]string` to identify the external resource type. Provider-specific, Kausality doesn't interpret it.
-
-```yaml
-# Crossplane provider
-- target:
-    external:
-      provider: provider-aws
-      kind: RDSInstance
-  relation: External
-  verbs: [Update]
-
-# Terraform resource
-- target:
-    external:
-      resource: aws_rds_cluster
-  relation: External
-  verbs: [apply]
+```go
+// The library doesn't filter — it processes whatever requests it receives
+// Resource targeting is done at the apiserver level (which resources invoke admission)
+admission.NewHandler(admission.Config{
+    Client:       client,
+    PolicyLister: policyInformer.Lister(),
+})
 ```
 
-## Admission Flow
+In a generic control plane, resource targeting is handled by which admission plugins are registered for which resources — not by the admission logic itself.
 
-```
-Human changes Deployment.spec.replicas
-         |
-         v
-+---------------------------------------------+
-| Admission Webhook (on Deployment)           |
-|                                             |
-| 1. Evaluate AllowancePolicies               |
-| 2. Check subjects + mayInitiate             |
-| 3. Check CEL conditions                     |
-| 4. Inject allowances into annotations       |
-+---------------------------------------------+
-         |
-         v
-Controller mutates ReplicaSet
-         |
-         v
-+---------------------------------------------+
-| Admission Webhook (on ReplicaSet)           |
-|                                             |
-| 1. Find parent via ownerRef                 |
-| 2. Check parent has matching allowance      |
-| 3. Check subject (SA) is permitted          |
-| 4. Inject downstream allowances             |
-| 5. Prune consumed allowances on parent      |
-+---------------------------------------------+
-         |
-         v
-        ...
-```
+#### Design Note
 
-## Primitives
+Resource targeting is **deployment configuration**, not core library logic:
+- **Webhook mode**: Helm chart generates WebhookConfiguration with rules
+- **Library mode**: Apiserver registration determines which resources invoke admission
 
-- Allowances stored on objects are protected by admission
-- A mutation can only add allowances if:
-  - Parent object has a matching allowance AND policy permits propagation, OR
-  - Policy matches with a `mayInitiate` subject
-- User identity comes from Kubernetes authentication (not self-declared)
-- Default-deny: without a matching allowance, controllers cannot mutate downstream
+The core admission handler assumes it should process every request it receives. Filtering is external.
 
-## Object Lifecycle Phases
+## Design Decisions
 
-An object goes through three phases, each with different allowance rules:
+- **Multi-parent**: Only the controller ownerRef (`controller: true`) is subject to drift detection. Other ownerRefs are ignored.
+- **Cross-namespace**: Works as-is. ownerRef traversal works regardless of namespace (cluster-scoped parent, namespaced child is fine).
 
-### Initializing
+### Consistency Trade-offs
 
-During initialization, the object graph is being built. Defined by `initializing.when` CEL expression in the policy (default: `"!has(object.status.observedGeneration)"`).
+Admission uses informer cache for parent lookup. Cache may be stale:
+- **Stale gen > obsGen**: Cache shows parent not-yet-reconciled, reality is gen==obsGen. Could block expected change.
+- **Stale gen == obsGen**: Cache shows drift, reality is gen!=obsGen (spec just changed). Could allow drift without approval.
 
-Typical permissions:
-- `Create` child objects: allowed
-- `Insert`, `Mutate` fields: allowed (for late initialization)
-- `Delete` children: usually not allowed
+This is inherent in distributed systems — cross-resource consistency is limited. Mitigation:
+- Keep informer cache fresh (reasonable resync period)
+- Accept occasional false positives/negatives as acceptable trade-off
+- Controllers retry on transient admission errors
 
-### Steady State
+## Implementation
 
-After initialization completes (CEL expression becomes false), explicit allowances are required for all changes. The `rules` section defines trigger → policies mappings.
+### Phase 1: Admission-Based Change Detection (Logging Only)
+- Implement admission webhook/plugin
+- Check parent generation vs observedGeneration
+- Log when drift would be blocked
+- Optional Slack notifications
+- No blocking, observability only
 
-### Deleting
+### Phase 2: Request-Trace Annotation
+- Initialize request-trace on parent mutations
+- Propagate/replace trace through controller hierarchy
 
-When the parent has `deletionTimestamp`, the `deleting` section applies.
+### Phase 3: Per-Object Approval Annotation
+- Implement approval annotation parsing with modes (once, generation, always)
+- Add pruning on generation change via admission
+- Block drift without approval
 
-Default behavior:
-- Child KRM objects: can be deleted (`verbs: ["*"]`)
-- External resources: preserved (must be explicitly allowed)
+### Phase 4: ApprovalPolicy CRD and Slack Integration
+- Define and implement ApprovalPolicy CRD
+- Integrate Slack escalation workflow
+- Implement approval/rejection via Slack bot
 
-## Controller, Composition, and Function Upgrades
+### Phase 5: TerraformApprovalPolicy for L0 Controllers
+- Extend to Terraform plan-based detection
+- Add TerraformApprovalPolicy CRD
 
-When controllers, Crossplane Compositions, Functions, or other "logic" changes, reconciliation may produce different outputs for all affected objects. This requires a mechanism to grant upgrade allowances.
+## Rationale
 
-### User-Agent Based Detection
+- **Explicit Control**: Provides explicit control over unexpected infrastructure changes rather than silent modifications
+- **Audit Trail**: Request-trace and Slack history provide comprehensive audit trail
+- **Flexible Exceptions**: ApprovalPolicy rules reduce operational toil for known-safe patterns
+- **AI-Ready**: Foundation for AI-assisted approvals in the future
+- **Controller-Agnostic**: Works without modifying existing controllers
 
-Kubernetes API requests include a User-Agent header with the format:
-```
-command/version (os/arch) kubernetes/commit
-```
+## Consequences
 
-Example: `crossplane/v1.15.0 (linux/amd64) kubernetes/abc1234`
+### Positive
+- Explicit control over unexpected infrastructure changes
+- Audit trail via request-trace and Slack history
+- Flexible exception rules reduce operational toil
+- Foundation for AI-assisted approvals
+- No controller modifications required
 
-Admission webhooks receive this header. By storing a hash of the user-agent on each object, we can detect when a new controller version is making requests.
+### Negative
+- Admission latency for parent lookup
+- Operational overhead for initial policy setup
+- Slack dependency for escalation path
+- Informer cache staleness can cause false positives/negatives
 
-**Annotation on objects:**
-```yaml
-metadata:
-  annotations:
-    kausality.io/controller-ua-hash: "a1ef23b4"  # short hash of user-agent
-```
+### Mitigations
+- Phase 1 logging-only allows gradual rollout
+- ApprovalPolicy reduces manual approval burden
+- Approval modes (once, generation, always) cover different use cases
+- Freeze/snooze provide operational escape hatches
 
-**Detection flow:**
-1. Controller mutates object
-2. Admission computes hash of request's User-Agent
-3. Compares with `kausality.io/controller-ua-hash` annotation
-4. If different → upgrade detected → check UpgradeAllowance
-5. If same → normal allowance rules apply
+## Alternatives Considered
 
-### UpgradeAllowance
+### Metrics-only Alerting (No Blocking)
+Rejected: Does not prevent unexpected changes, only detects after the fact.
 
-Defines what mutations a ServiceAccount may perform when an upgrade is detected:
+### Per-Resource Approval Annotations Only (No Policies)
+Rejected: Would require manual approval for every change, too much operational burden.
 
-```yaml
-kind: UpgradeAllowance
-apiVersion: kausality.io/v1alpha1
-metadata:
-  name: crossplane-upgrade
-spec:
-  serviceAccount: system:serviceaccount:crossplane-system:crossplane
-  policies:
-  - target:
-      apiVersion: rds.aws.crossplane.io/v1alpha1
-      resource: rdsinstances
-    relation: ControllerChild
-    mutations: ["spec.forProvider"]
-  - target:
-      external:
-        provider: provider-aws
-    relation: External
-    verbs: [Update]
-```
+### Hash-Based Spec Change Detection Instead of Generation
+Rejected: Generation/observedGeneration is already the standard Kubernetes pattern and sufficient for our needs.
 
-No `validFrom`/`validUntil` needed — activation is automatic based on user-agent change.
-
-**Admission flow:**
-1. Controller (new version) mutates object
-2. Admission sees user-agent hash differs from annotation
-3. Finds UpgradeAllowance for this ServiceAccount
-4. Checks if mutation matches an entry in `policies`
-5. If match: grant allowance, update `kausality.io/controller-ua-hash`
-6. If no match or no UpgradeAllowance: block or escalate
-
-**Benefits:**
-- No timing coordination — detection is based on actual requests
-- Old controller continues normally (same hash, no upgrade triggered)
-- New controller automatically detected on first request
-- Per-object: each object upgraded once per new binary
-- UpgradeAllowance can be created before OR after deployment
-
-### Workflow
-
-1. Create UpgradeAllowance for the ServiceAccount (can be done anytime)
-2. Deploy new controller version
-3. New controller reconciles objects
-4. Admission detects user-agent change, grants upgrade allowance
-5. Annotation updated, subsequent reconciles use normal rules
-
-### Open Questions
-
-#### Composition and Function Changes
-
-User-agent detection works for controller binary changes. But Crossplane Compositions and Functions can change independently of the controller binary.
-
-Options:
-- Treat Composition/Function changes as requiring explicit UpgradeAllowance with time window
-- Hash Composition content and store alongside controller hash
-- Accept that Composition changes are lower risk (they don't change external API calls directly)
-
-#### Hash Stability
-
-The user-agent includes:
-- Binary name (from `os.Args[0]`)
-- Version (build-time)
-- OS/arch
-- Git commit
-
-Some of these may change without semantic controller changes (e.g., rebuilding same version). Consider:
-- Hashing only the version portion
-- Allowing wildcard patterns in UpgradeAllowance to ignore patch versions
-
-## Crossplane Integration
-
-Crossplane manages external resources (cloud infrastructure) through a hierarchy:
-
-```
-Claim (namespaced)
-    → Composite Resource (XR, cluster-scoped)
-        → Managed Resources (MRs)
-            → External API (AWS, GCP, Terraform)
-```
-
-Each level connected by ownerRefs. Kausality traces and gates mutations through this chain.
-
-### External Relation
-
-For non-KRM resources, use `relation: External`:
-
-```yaml
-policies:
-# KRM mutations (what the controller may change on child MRs)
-- target:
-    apiVersion: rds.aws.crossplane.io/v1alpha1
-    resource: rdsinstances
-  relation: ControllerChild
-  mutations:
-  - jsonPath: "spec.forProvider.instanceClass"
-    verbs: [Mutate]
-
-# External mutations (what the provider may do to cloud resources)
-- target:
-    external:
-      provider: provider-aws
-      kind: RDSInstance
-  relation: External
-  verbs: [Update]
-```
-
-The `verbs` vocabulary for External is system-specific:
-
-| System | Verbs |
-|--------|-------|
-| Crossplane | `Create`, `Update`, `Delete` (managementPolicies verbs) |
-| Terraform | `apply`, `destroy` |
-| ArgoCD | `sync`, `delete` |
-
-### Gating via managementPolicies
-
-Crossplane providers respect `spec.managementPolicies` on Managed Resources. Kausality uses this to gate external mutations without modifying providers.
-
-**Default state** — MRs are read-only:
-```yaml
-kind: RDSInstance
-metadata:
-  annotations:
-    kausality.io/allowances: |
-      []  # no allowances
-spec:
-  managementPolicies: ["Observe", "LateInitialize"]  # provider won't mutate
-  forProvider:
-    instanceClass: db.t3.medium
-```
-
-**When allowance arrives** — admission opens the gate:
-```yaml
-kind: RDSInstance
-metadata:
-  annotations:
-    kausality.io/allowances: |
-      - relation: External
-        mutations: ["Update"]
-        generation: 8
-        initiator: hans@example.com
-        trace:
-        - kind: DatabaseClaim
-          name: my-database
-          generation: 5
-          field: spec.size
-        - kind: XDatabase
-          name: my-database-xyz
-          generation: 12
-          field: spec.instanceClass
-        - kind: RDSInstance
-          name: my-database-xyz-rds
-          generation: 8
-          field: spec.forProvider.instanceClass
-spec:
-  managementPolicies: ["Observe", "LateInitialize", "Update"]  # gate open
-  forProvider:
-    instanceClass: db.t3.large  # changed
-```
-
-Provider sees `Update` in managementPolicies, performs the AWS API call.
-
-### Kausality Controller
-
-A controller watches MRs and closes the gate as soon as the mutation is applied:
-
-```
-+--------------------------------------------------+
-| Kausality Controller (watches MRs)                  |
-|                                                  |
-| On reconcile:                                    |
-| - If status.observedGeneration >= allowance.gen  |
-|   AND managementPolicies contains mutation verbs |
-|   → Patch spec.managementPolicies to read-only   |
-|   → Prune consumed allowances                    |
-+--------------------------------------------------+
-```
-
-This ensures the gate is open only for the duration of the mutation, not longer.
-
-### Crossplane Admission Flow
-
-```
-User changes Claim.spec.size: "large"
-         |
-         v
-+-----------------------------------------------+
-| Admission (on Claim)                          |
-| - Evaluates AllowancePolicies                 |
-| - Injects allowances for XR mutations         |
-+-----------------------------------------------+
-         |
-         v
-Crossplane claim-controller updates XR.spec
-         |
-         v
-+-----------------------------------------------+
-| Admission (on XR)                             |
-| - Checks Claim has allowance                  |
-| - Injects allowances for MR mutations         |
-| - Includes relation: External allowances      |
-+-----------------------------------------------+
-         |
-         v
-Composition controller updates MR.spec
-         |
-         v
-+-----------------------------------------------+
-| Admission (on MR)                             |
-| - Checks XR has allowance                     |
-| - Sets managementPolicies based on External   |
-|   allowance mutations (e.g., adds "Update")   |
-+-----------------------------------------------+
-         |
-         v
-Provider sees managementPolicies: [..., "Update"]
-         |
-         v
-Provider calls AWS API
-         |
-         v
-Provider updates status.observedGeneration
-         |
-         v
-+-----------------------------------------------+
-| Kausality Controller                             |
-| - Sees observedGeneration caught up           |
-| - Reverts managementPolicies to read-only     |
-| - Prunes consumed allowances                  |
-+-----------------------------------------------+
-```
-
-### Example AllowancePolicy for Crossplane
-
-```yaml
-kind: AllowancePolicy
-apiVersion: kausality.io/v1alpha1
-metadata:
-  name: database-claim-policy
-spec:
-  for:
-    apiVersion: example.com/v1alpha1
-    kind: DatabaseClaim
-
-  subjects:
-  - kind: Group
-    name: platform-team
-    mayInitiate: true
-
-  initializing:
-    when: "!has(object.status.observedGeneration)"
-    policies:
-    - target:
-        apiVersion: example.com/v1alpha1
-        resource: xdatabases
-      relation: ControllerChild
-      verbs: [Create]
-      mutations:
-      - jsonPath: "*"
-        verbs: [Insert, Mutate]
-
-  deleting:
-    policies:
-    - target:
-        apiVersion: example.com/v1alpha1
-        resource: xdatabases
-      relation: ControllerChild
-      verbs: ["*"]
-    - target:
-        external:
-          provider: provider-aws
-      relation: External
-      verbs: [Delete]
-
-  rules:
-  - trigger: "spec.size"
-    conditions:
-    - "has(object.metadata.annotations['jira'])"
-    capture:
-    - "metadata.annotations[jira]"
-    policies:
-    - target:
-        apiVersion: example.com/v1alpha1
-        resource: xdatabases
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "spec.size"
-        verbs: [Mutate]
-
-  - trigger: "spec.engine"
-    conditions:
-    - "has(object.metadata.annotations['jira'])"
-    capture:
-    - "metadata.annotations[jira]"
-    policies:
-    - target:
-        apiVersion: example.com/v1alpha1
-        resource: xdatabases
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "spec.engine"
-        verbs: [Mutate]
----
-kind: AllowancePolicy
-apiVersion: kausality.io/v1alpha1
-metadata:
-  name: xdatabase-policy
-spec:
-  for:
-    apiVersion: example.com/v1alpha1
-    kind: XDatabase
-
-  subjects:
-  - kind: ServiceAccount
-    name: crossplane
-    namespace: crossplane-system
-
-  initializing:
-    when: "!has(object.status.observedGeneration)"
-    policies:
-    - target:
-        apiVersion: rds.aws.crossplane.io/v1alpha1
-        resource: rdsinstances
-      relation: ControllerChild
-      verbs: [Create]
-      mutations:
-      - jsonPath: "*"
-        verbs: [Insert, Mutate]
-    - target:
-        external:
-          provider: provider-aws
-      relation: External
-      verbs: [Create]
-
-  deleting:
-    policies:
-    - target:
-        apiVersion: rds.aws.crossplane.io/v1alpha1
-        resource: rdsinstances
-      relation: ControllerChild
-      verbs: ["*"]
-    - target:
-        external:
-          provider: provider-aws
-      relation: External
-      verbs: [Delete]
-
-  rules:
-  - trigger: "spec.size"
-    policies:
-    - target:
-        apiVersion: rds.aws.crossplane.io/v1alpha1
-        resource: rdsinstances
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "spec.forProvider.instanceClass"
-        verbs: [Mutate]
-    - target:
-        external:
-          provider: provider-aws
-          kind: RDSInstance
-      relation: External
-      verbs: [Update]
-
-  - trigger: "spec.engine"
-    conditions:
-    - "object.metadata.annotations['allow-recreate'] == 'true'"
-    policies:
-    - target:
-        apiVersion: rds.aws.crossplane.io/v1alpha1
-        resource: rdsinstances
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "spec.forProvider.engine"
-        verbs: [Mutate]
-    - target:
-        external:
-          provider: provider-aws
-          kind: RDSInstance
-      relation: External
-      verbs: [Delete, Create]  # destructive: recreate
-```
-
-## Kro Integration
-
-[Kro](https://github.com/kubernetes-sigs/kro) (Kube Resource Orchestrator) defines resource DAGs via ResourceGraphDefinitions. The dependency graph can be used to automatically derive AllowancePolicies.
-
-### ResourceGraphDefinition Example
-
-```yaml
-apiVersion: kro.run/v1alpha1
-kind: ResourceGraphDefinition
-metadata:
-  name: webapp
-spec:
-  schema:
-    apiVersion: example.com/v1alpha1
-    kind: WebApp
-    spec:
-      name: string
-      image: string
-      replicas: integer
-
-  resources:
-  - id: deployment
-    template:
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ${schema.spec.name}
-      spec:
-        replicas: ${schema.spec.replicas}
-        template:
-          spec:
-            containers:
-            - name: app
-              image: ${schema.spec.image}
-
-  - id: service
-    template:
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: ${schema.spec.name}
-      spec:
-        selector:
-          app: ${deployment.metadata.labels.app}  # depends on deployment
-```
-
-### Deriving AllowancePolicy from DAG
-
-The `${...}` references create explicit edges in the dependency graph:
-
-| Schema Field | References | Resource Field |
-|--------------|------------|----------------|
-| `schema.spec.name` | → | `deployment.metadata.name` |
-| `schema.spec.replicas` | → | `deployment.spec.replicas` |
-| `schema.spec.image` | → | `deployment.spec.template.spec.containers[0].image` |
-| `deployment.metadata.labels.app` | → | `service.spec.selector.app` |
-
-From this, we can derive:
-
-```yaml
-kind: AllowancePolicy
-apiVersion: kausality.io/v1alpha1
-metadata:
-  name: webapp-policy
-  annotations:
-    kausality.io/derived-from: webapp  # source RGD
-spec:
-  for:
-    apiVersion: example.com/v1alpha1
-    kind: WebApp
-
-  subjects:
-  - kind: ServiceAccount
-    name: kro-controller
-    namespace: kro-system
-
-  initializing:
-    when: "!has(object.status.observedGeneration)"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: deployments
-      relation: ControllerChild
-      verbs: [Create]
-      mutations:
-      - jsonPath: "*"
-        verbs: [Insert, Mutate]
-    - target:
-        apiVersion: v1
-        resource: services
-      relation: ControllerChild
-      verbs: [Create]
-      mutations:
-      - jsonPath: "*"
-        verbs: [Insert, Mutate]
-
-  rules:
-  - trigger: "spec.name"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: deployments
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "metadata.name"
-        verbs: [Mutate]
-    - target:
-        apiVersion: v1
-        resource: services
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "metadata.name"
-        verbs: [Mutate]
-
-  - trigger: "spec.replicas"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: deployments
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "spec.replicas"
-        verbs: [Mutate]
-
-  - trigger: "spec.image"
-    policies:
-    - target:
-        apiVersion: apps/v1
-        resource: deployments
-      relation: ControllerChild
-      verbs: [Update]
-      mutations:
-      - jsonPath: "spec.template.spec.containers[*].image"
-        verbs: [Mutate]
-```
-
-### Derivation Algorithm
-
-1. Parse ResourceGraphDefinition
-2. For each `${schema.spec.X}` reference in a resource template:
-   - Extract the schema field path (`spec.X`)
-   - Extract the target resource and field path
-   - Create a rule: `trigger: spec.X` → `policies: [{target, jsonPath}]`
-3. For inter-resource references (`${resourceId.field}`):
-   - Track transitive dependencies
-   - Include in parent's policies list
-4. Set `subjects` to the Kro controller ServiceAccount
-5. Annotate with source RGD for traceability
-
-### Automation
-
-A Kro webhook or controller could:
-1. Watch ResourceGraphDefinitions
-2. Generate corresponding AllowancePolicies automatically
-3. Keep them in sync when RGDs change
-
-This eliminates manual policy authoring for Kro-managed resources.
+### Controller-Based Detection (Dry-Run in Controller)
+Rejected for simplified design: Requires controller modifications. Admission-only approach works without touching controllers.
