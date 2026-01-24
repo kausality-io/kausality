@@ -1,6 +1,7 @@
 package callback
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -151,11 +152,23 @@ func TestTracker_Concurrent(t *testing.T) {
 
 func TestTracker_StartCleanupLoop(t *testing.T) {
 	now := time.Now()
+	var mu sync.RWMutex
 	currentTime := now
+
+	getNow := func() time.Time {
+		mu.RLock()
+		defer mu.RUnlock()
+		return currentTime
+	}
+	setNow := func(newTime time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		currentTime = newTime
+	}
 
 	tracker := NewTracker(
 		WithTTL(10*time.Millisecond),
-		WithNowFunc(func() time.Time { return currentTime }),
+		WithNowFunc(getNow),
 	)
 
 	tracker.Track("id1")
@@ -166,7 +179,7 @@ func TestTracker_StartCleanupLoop(t *testing.T) {
 	defer stop()
 
 	// Advance time past TTL
-	currentTime = now.Add(20 * time.Millisecond)
+	setNow(now.Add(20 * time.Millisecond))
 
 	// Wait for cleanup to run
 	time.Sleep(15 * time.Millisecond)

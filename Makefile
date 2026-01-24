@@ -84,6 +84,26 @@ docker-build: ## Build docker image.
 docker-push: ## Push docker image.
 	docker push ${IMG}
 
+.PHONY: ko-build
+ko-build: ko ## Build images with ko (local).
+	KO_DOCKER_REPO=ko.local $(KO) build --bare ./cmd/kausality-webhook
+	KO_DOCKER_REPO=ko.local $(KO) build --bare ./cmd/kausality-backend-log
+
+.PHONY: ko-build-kind
+ko-build-kind: ko ## Build and load images into kind cluster.
+	KIND_CLUSTER_NAME=$${KIND_CLUSTER_NAME:-kausality-e2e} $(KO) build --bare ./cmd/kausality-webhook | xargs -I{} kind load docker-image {} --name $${KIND_CLUSTER_NAME}
+	KIND_CLUSTER_NAME=$${KIND_CLUSTER_NAME:-kausality-e2e} $(KO) build --bare ./cmd/kausality-backend-log | xargs -I{} kind load docker-image {} --name $${KIND_CLUSTER_NAME}
+
+##@ E2E Testing
+
+.PHONY: e2e
+e2e: ## Run e2e tests with kind.
+	./test/e2e/run.sh
+
+.PHONY: e2e-crossplane
+e2e-crossplane: ## Run e2e tests with Crossplane.
+	./test/e2e/crossplane/run.sh
+
 ##@ Deployment
 
 .PHONY: install
@@ -105,11 +125,15 @@ $(LOCALBIN):
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 HELM ?= $(LOCALBIN)/helm
 SETUP_ENVTEST ?= $(LOCALBIN)/setup-envtest
+KO ?= $(LOCALBIN)/ko
+KIND ?= $(LOCALBIN)/kind
 
 ## Tool Versions
 GOLANGCI_LINT_VERSION ?= v2.8.0
 HELM_VERSION ?= v3.16.3
 ENVTEST_K8S_VERSION ?= 1.31.0
+KO_VERSION ?= v0.17.1
+KIND_VERSION ?= v0.25.0
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
@@ -131,6 +155,16 @@ $(HELM): $(LOCALBIN)
 setup-envtest: $(SETUP_ENVTEST) ## Download setup-envtest locally if necessary.
 $(SETUP_ENVTEST): $(LOCALBIN)
 	@test -s $(SETUP_ENVTEST) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+.PHONY: ko
+ko: $(KO) ## Download ko locally if necessary.
+$(KO): $(LOCALBIN)
+	@test -s $(KO) || GOBIN=$(LOCALBIN) go install github.com/google/ko@$(KO_VERSION)
+
+.PHONY: kind
+kind: $(KIND) ## Download kind locally if necessary.
+$(KIND): $(LOCALBIN)
+	@test -s $(KIND) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/kind@$(KIND_VERSION)
 
 .PHONY: clean
 clean: ## Clean up build artifacts.

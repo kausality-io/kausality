@@ -1,0 +1,10 @@
+# ko configuration for kausality
+defaultBaseImage: gcr.io/distroless/static:nonroot
+
+builds:
+  - id: kausality-webhook
+    main: ./cmd/kausality-webhook
+  - id: kausality-backend-log
+    main: ./cmd/kausality-backend-log
+  - id: kausality-backend-tui
+    main: ./cmd/kausality-backend-tui
