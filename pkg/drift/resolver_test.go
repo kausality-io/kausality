@@ -252,10 +252,10 @@ func TestExtractParentState(t *testing.T) {
 
 func TestExtractConditions(t *testing.T) {
 	tests := []struct {
-		name       string
-		status     map[string]interface{}
-		wantCount  int
-		wantTypes  []string
+		name      string
+		status    map[string]interface{}
+		wantCount int
+		wantTypes []string
 	}{
 		{
 			name:      "no conditions",

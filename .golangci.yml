@@ -1,26 +1,27 @@
+version: "2"
+
 run:
   timeout: 5m
   go: "1.23"
 
 linters:
+  default: standard
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - gosimple
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - unparam
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/kausality-io/kausality
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - k8s.io
+        - sigs.k8s.io
+        - github.com/kausality-io/kausality
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
