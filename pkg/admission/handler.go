@@ -57,6 +57,19 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		return admission.Allowed("operation not relevant for drift detection")
 	}
 
+	// For UPDATE, check if spec changed - ignore status/metadata-only changes
+	if req.Operation == admissionv1.Update {
+		specChanged, err := h.hasSpecChanged(req)
+		if err != nil {
+			log.Error(err, "failed to check spec change")
+			return admission.Errored(http.StatusBadRequest, fmt.Errorf("failed to check spec change: %w", err))
+		}
+		if !specChanged {
+			log.V(2).Info("no spec change, skipping drift detection")
+			return admission.Allowed("no spec change")
+		}
+	}
+
 	// Parse the object from the request
 	obj, err := h.parseObject(req)
 	if err != nil {
@@ -139,6 +152,50 @@ func (h *Handler) parseObject(req admission.Request) (client.Object, error) {
 func (h *Handler) InjectDecoder(d admission.Decoder) error {
 	h.decoder = d
 	return nil
+}
+
+// hasSpecChanged checks if the spec field changed between old and new object.
+func (h *Handler) hasSpecChanged(req admission.Request) (bool, error) {
+	if len(req.OldObject.Raw) == 0 || len(req.Object.Raw) == 0 {
+		return true, nil // can't compare, assume changed
+	}
+
+	oldObj := &unstructured.Unstructured{}
+	if err := runtime.DecodeInto(unstructured.UnstructuredJSONScheme, req.OldObject.Raw, oldObj); err != nil {
+		return false, fmt.Errorf("failed to decode old object: %w", err)
+	}
+
+	newObj := &unstructured.Unstructured{}
+	if err := runtime.DecodeInto(unstructured.UnstructuredJSONScheme, req.Object.Raw, newObj); err != nil {
+		return false, fmt.Errorf("failed to decode new object: %w", err)
+	}
+
+	oldSpec, _, _ := unstructured.NestedFieldCopy(oldObj.Object, "spec")
+	newSpec, _, _ := unstructured.NestedFieldCopy(newObj.Object, "spec")
+
+	return !equalSpec(oldSpec, newSpec), nil
+}
+
+// equalSpec compares two spec values for equality.
+func equalSpec(a, b interface{}) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Use JSON encoding for deep comparison
+	aJSON, err := runtime.Encode(unstructured.UnstructuredJSONScheme, &unstructured.Unstructured{Object: map[string]interface{}{"spec": a}})
+	if err != nil {
+		return false
+	}
+	bJSON, err := runtime.Encode(unstructured.UnstructuredJSONScheme, &unstructured.Unstructured{Object: map[string]interface{}{"spec": b}})
+	if err != nil {
+		return false
+	}
+
+	return string(aJSON) == string(bJSON)
 }
 
 // ValidatingWebhookFor creates a ValidatingAdmissionResponse for the given result.

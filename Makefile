@@ -41,6 +41,11 @@ test: fmt vet ## Run tests.
 test-verbose: fmt vet ## Run tests with verbose output.
 	go test ./... -v
 
+.PHONY: envtest
+envtest: setup-envtest ## Run envtest integration tests.
+	KUBEBUILDER_ASSETS="$(shell $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go test ./... -tags=envtest -v
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.
 	$(GOLANGCI_LINT) run
@@ -87,10 +92,12 @@ $(LOCALBIN):
 ## Tool Binaries
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 HELM ?= $(LOCALBIN)/helm
+SETUP_ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
 GOLANGCI_LINT_VERSION ?= v1.62.2
 HELM_VERSION ?= v3.16.3
+ENVTEST_K8S_VERSION ?= 1.31.0
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
@@ -107,6 +114,11 @@ $(HELM): $(LOCALBIN)
 		HELM_INSTALL_DIR=$(LOCALBIN) USE_SUDO=false ./get_helm.sh --version $(HELM_VERSION) && \
 		rm get_helm.sh; \
 	}
+
+.PHONY: setup-envtest
+setup-envtest: $(SETUP_ENVTEST) ## Download setup-envtest locally if necessary.
+$(SETUP_ENVTEST): $(LOCALBIN)
+	@test -s $(SETUP_ENVTEST) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
 .PHONY: clean
 clean: ## Clean up build artifacts.
