@@ -100,6 +100,9 @@ spec:
         - name: callback-ca
           secret:
             secretName: {{ .Values.driftCallback.ca.existingSecret }}
+            items:
+              - key: {{ .Values.driftCallback.ca.key | default "ca.crt" }}
+                path: ca.crt
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

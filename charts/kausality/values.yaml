@@ -131,8 +131,11 @@ driftCallback:
   ca:
     # Inline CA certificate (PEM format)
     cert: ""
-    # Or use existing secret containing ca.crt
+    # Or use existing secret
     existingSecret: ""
+    # Key in the secret to use (default: ca.crt)
+    # Use "tls.crt" for cert-manager secrets
+    key: "ca.crt"
   # Request timeout
   timeout: 10s
   # Retry configuration
