@@ -154,7 +154,7 @@ excludeNamespaces:
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.25+
 - Docker (for building images)
 - kubectl configured for a test cluster
 - [kind](https://kind.sigs.k8s.io/) (optional, for local testing)
