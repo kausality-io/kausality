@@ -3,7 +3,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/sttts/kausality
+  repository: ghcr.io/kausality-io/kausality
   pullPolicy: IfNotPresent
   tag: ""  # Defaults to appVersion
 

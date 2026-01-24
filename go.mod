@@ -1,4 +1,4 @@
-module github.com/sttts/kausality
+module github.com/kausality-io/kausality
 
 go 1.25.0
 

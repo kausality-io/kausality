@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"github.com/sttts/kausality/pkg/webhook"
+	"github.com/kausality-io/kausality/pkg/webhook"
 )
 
 var (

@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	"github.com/sttts/kausality/pkg/admission"
+	"github.com/kausality-io/kausality/pkg/admission"
 )
 
 // Config configures the webhook server.

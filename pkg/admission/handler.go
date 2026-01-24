@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/sttts/kausality/pkg/drift"
+	"github.com/kausality-io/kausality/pkg/drift"
 )
 
 // Handler handles admission requests for drift detection.
