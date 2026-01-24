@@ -42,18 +42,24 @@ Kausality detects unexpected infrastructure changes (drift) in Kubernetes by mon
 
 ## How It Works
 
-When a controller mutates a child object, Kausality checks the **parent's** state:
+When a mutation is intercepted, Kausality:
 
-```
-parent := resolve via controller ownerReference (controller: true)
+1. **Identifies the actor** via `request.options.fieldManager` and compares with the parent's controller (the manager that owns `status.observedGeneration` in the parent's managedFields)
 
-if parent.generation != parent.status.observedGeneration:
-    # Parent spec changed → expected change → ALLOW
-else:
-    # Parent spec unchanged → drift detected → LOG
-```
+2. **Checks the parent's state** (`generation` vs `observedGeneration`)
 
-**Why this works**: Controllers reconcile children based on their own spec. If the parent's spec hasn't changed (generation == observedGeneration), any child mutation indicates drift.
+| Actor | Parent State | Result |
+|-------|--------------|--------|
+| Controller | gen != obsGen | **Expected** — controller is reconciling |
+| Controller | gen == obsGen | **Drift** — controller changing without spec change |
+| Different actor | any | **New origin** — not drift, just a different causal chain |
+
+**Drift** specifically means: the controller is making changes when the parent spec hasn't changed. This could indicate:
+- External modifications to cloud resources
+- Updates to referenced resources (ClusterRelease, MachineClass)
+- Controller behavior changes from software updates
+
+**Different actors** (kubectl, HPA, GitOps tools) are not considered drift — they start new causal chains. Use ApprovalPolicy to control which actors are allowed.
 
 ### Lifecycle Phases
 

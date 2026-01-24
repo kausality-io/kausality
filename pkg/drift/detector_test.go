@@ -167,7 +167,7 @@ func TestDetectFromStateWithFieldManager(t *testing.T) {
 			expectReasonMatch: "drift detected: parent generation",
 		},
 		{
-			name: "different actor - drift (regardless of gen/obsGen)",
+			name: "different actor - not drift (new causal origin)",
 			state: &ParentState{
 				Ref:                   ParentRef{Kind: "Deployment", Name: "test"},
 				Generation:            5,
@@ -176,8 +176,8 @@ func TestDetectFromStateWithFieldManager(t *testing.T) {
 				ControllerManager:     "my-controller",
 			},
 			fieldManager:      "other-actor",
-			expectDrift:       true,
-			expectReasonMatch: "request from",
+			expectDrift:       false,
+			expectReasonMatch: "different actor",
 		},
 		{
 			name: "unknown controller - fallback assumes controller",

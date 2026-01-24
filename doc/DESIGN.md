@@ -25,18 +25,34 @@ Implement an **admission-only** change detection and approval system that:
 
 ### Detection Mechanism
 
-When a controller mutates a child object, admission intercepts and checks the **parent's** state:
+When a mutation is intercepted, admission:
+
+1. **Identifies the actor** by comparing `request.options.fieldManager` with the parent's controller manager
+2. **Checks the parent's state** (`generation` vs `observedGeneration`)
 
 ```
 parent := resolve via controller ownerReference (controller: true)
+isController := request.fieldManager == parent.managedFields[observedGeneration].manager
 
-if parent.generation != parent.status.observedGeneration:
-    # Parent spec changed → expected change → ALLOW
+if NOT isController:
+    # Different actor → new causal origin (not drift)
+    # Start new trace, may require approval via ApprovalPolicy
+else if parent.generation != parent.status.observedGeneration:
+    # Controller is reconciling → expected change → ALLOW
 else:
-    # Parent spec unchanged → drift → check approvals
+    # Controller updating but parent unchanged → DRIFT
+    # Check approvals
 ```
 
-**Why this works**: Controllers reconcile children based on their own spec. If the parent's spec hasn't changed (gen == obsGen), any child mutation is from drift.
+| Actor | Parent State | Result |
+|-------|--------------|--------|
+| Controller | gen != obsGen | **Expected** — controller is reconciling |
+| Controller | gen == obsGen | **Drift** — controller changing without spec change |
+| Different actor | any | **New origin** — not drift, requires ApprovalPolicy |
+
+**Drift** specifically means: the controller is making changes when the parent spec hasn't changed (gen == obsGen). This indicates unexpected reconciliation triggered by external factors (drift in cloud state, software updates, etc.).
+
+**Different actors** (kubectl, HPA, GitOps tools) are not considered drift — they're simply different causal chains. These may still require approval via ApprovalPolicy, but they're semantically different from controller drift.
 
 **Spec changes only**: Kausality only intercepts mutations to `spec`. Changes to `status` or `metadata` are ignored — no drift detection, no tracing, no approval required. Status updates are controllers reporting state, and metadata changes are typically administrative.
 
@@ -83,7 +99,7 @@ Here, `capi-controller` is the controller. Any child update with `fieldManager: 
 
 **Late installation:** Works automatically. The parent's managedFields already contains the controller's manager string from previous status updates.
 
-**Non-owning controllers (HPA, VPA):** These don't set controller ownerReferences and don't update `observedGeneration`. They appear as separate actors. Their changes create new trace origins (drift from the primary controller's perspective). Use ApprovalPolicy to whitelist known actors like HPA.
+**Non-owning controllers (HPA, VPA):** These don't set controller ownerReferences and don't update `observedGeneration`. They appear as different actors and create new trace origins. This is NOT drift — it's simply a different causal chain. Use ApprovalPolicy to allow known actors like HPA.
 
 **Implementation:** Use `sigs.k8s.io/structured-merge-diff` for parsing managedFields. This is the official library used by the Kubernetes API server.
 

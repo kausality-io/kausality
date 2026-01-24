@@ -95,10 +95,11 @@ func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object
 	isController := d.isControllerRequest(parentState, fieldManager)
 
 	if !isController {
-		// Different actor - this is drift (or a new origin for tracing)
-		result.Allowed = true // Phase 1: logging only, always allow
-		result.DriftDetected = true
-		result.Reason = fmt.Sprintf("drift detected: request from %q, controller is %q",
+		// Different actor - not drift, but a new causal origin
+		// (trace propagation will create a new trace for this)
+		result.Allowed = true
+		result.DriftDetected = false
+		result.Reason = fmt.Sprintf("change by different actor %q (controller is %q)",
 			fieldManager, parentState.ControllerManager)
 		return result, nil
 	}
@@ -186,10 +187,10 @@ func (d *Detector) DetectFromStateWithFieldManager(parentState *ParentState, fie
 	isController := d.isControllerRequest(parentState, fieldManager)
 
 	if !isController {
-		// Different actor - this is drift
-		result.Allowed = true // Phase 1: logging only
-		result.DriftDetected = true
-		result.Reason = fmt.Sprintf("drift detected: request from %q, controller is %q",
+		// Different actor - not drift, but a new causal origin
+		result.Allowed = true
+		result.DriftDetected = false
+		result.Reason = fmt.Sprintf("change by different actor %q (controller is %q)",
 			fieldManager, parentState.ControllerManager)
 		return result
 	}
