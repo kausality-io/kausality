@@ -1,0 +1,27 @@
+# Helm values for local Tilt development
+
+certificates:
+  selfSigned:
+    enabled: true
+
+backend:
+  enabled: true
+
+driftCallback:
+  enabled: true
+
+# Monitor deployments and replicasets for testing
+resourceRules:
+  include:
+    - apiGroups: ["apps"]
+      resources: ["deployments", "replicasets"]
+
+# Exclude kausality-system from drift detection
+excludeNamespaces:
+  - kube-system
+  - kube-public
+  - kube-node-lease
+  - kausality-system
+
+logging:
+  development: true
