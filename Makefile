@@ -60,6 +60,18 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes.
 build: fmt vet ## Build webhook binary.
 	go build -o bin/kausality-webhook ./cmd/kausality-webhook
 
+.PHONY: build-cli
+build-cli: fmt vet ## Build CLI binary.
+	go build -o bin/kausality-cli ./cmd/kausality-cli
+
+.PHONY: build-backend-tui
+build-backend-tui: fmt vet ## Build backend TUI binary.
+	go build -o bin/kausality-backend-tui ./cmd/kausality-backend-tui
+
+.PHONY: build-backend-log
+build-backend-log: fmt vet ## Build backend logger binary.
+	go build -o bin/kausality-backend-log ./cmd/kausality-backend-log
+
 .PHONY: run
 run: fmt vet ## Run the webhook from your host (for development).
 	go run ./cmd/kausality-webhook

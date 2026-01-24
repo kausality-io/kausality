@@ -105,7 +105,7 @@ Here, `capi-controller` is the controller. Any child update with `fieldManager: 
 
 **For Terraform (L0 controllers)**:
 - Check if plan is non-empty when generation == observedGeneration
-- Future: TerraformApprovalPolicy CRD for plan-based exceptions
+- Use webhook notifications for plan review workflows
 
 ### Approval and Rejection Annotations
 
@@ -324,6 +324,72 @@ These become `labels` in the trace hop:
 ```
 
 Each hop captures labels from its own object's annotations. Labels are not inherited from parent to child — the parent's labels are already visible in the parent's hop entry.
+
+### Drift Notification Webhook
+
+When drift is detected, kausality sends a `DriftReport` to configured webhook endpoints. Webhooks handle notifications (Slack, CLI, etc.) and apply actions via the Kubernetes API.
+
+**API Style**: Similar to admission webhooks — POST endpoint receiving `kind: DriftReport`
+
+**Configuration**: Flags (`--drift-webhook-url`, `--drift-webhook-timeout`, etc.)
+
+**Deduplication**: Content-based ID hash; only send once per unique drift occurrence.
+
+**Resolution**: Send `phase: Resolved` when drift is resolved (parent spec changed, approval added, or child deleted).
+
+#### DriftReport (kausality.io/v1alpha1)
+
+```yaml
+apiVersion: kausality.io/v1alpha1
+kind: DriftReport
+metadata:
+  name: <generated>
+spec:
+  id: "a1b2c3d4e5f67890"  # sha256(parent+child+diff)[:16]
+  phase: Detected         # or Resolved
+  parent:
+    apiVersion: example.com/v1alpha1
+    kind: EKSCluster
+    namespace: infra
+    name: prod
+    generation: 5
+  child:
+    apiVersion: v1
+    kind: ConfigMap
+    namespace: infra
+    name: cluster-config
+  oldObject: { ... }      # Previous state (UPDATE only)
+  newObject: { ... }      # New state
+  request:
+    user: "system:serviceaccount:infra:eks-controller"
+    uid: "abc-123"
+    fieldManager: "eks-controller"
+    operation: "UPDATE"
+  detection:
+    parentGeneration: 5
+    parentObservedGeneration: 5
+    controllerManager: "eks-controller"
+    lifecyclePhase: "Ready"
+```
+
+#### Resolution Triggers
+
+Send `phase: Resolved` when:
+1. Parent spec changed (generation incremented) — no longer drift
+2. Approval annotation added for this child
+3. Child object deleted
+
+#### Action Implementations
+
+Webhook implementations apply actions via Kubernetes API:
+
+| Action | Annotation Change |
+|--------|------------------|
+| Approve (once) | Add `kausality.io/approvals` with `mode: once` |
+| Approve (generation) | Add `kausality.io/approvals` with `mode: generation` |
+| Ignore (always) | Add `kausality.io/approvals` with `mode: always` |
+| Freeze | Add `kausality.io/rejections` entry |
+| Snooze | Set `kausality.io/snooze-until: <timestamp>` |
 
 ### Slack Escalation
 
@@ -553,14 +619,21 @@ This is inherent in distributed systems — cross-resource consistency is limite
 - [x] Enforce mode (per-G/GR configuration via Helm)
 - [x] Approval pruning via admission mutation (update annotations)
 
-### Phase 4: ApprovalPolicy CRD and Slack Integration
+### Phase 4: Drift Notification Webhook System
+- Implement DriftReport webhook callback (kausality.io/v1alpha1)
+- Content-based deduplication (ID hash)
+- Send phase=Resolved on drift resolution
+- Action helpers for webhook implementations
+
+### Phase 5: ApprovalPolicy CRD
 - Define and implement ApprovalPolicy CRD
+- Pattern-based exceptions (reduce per-object approval burden)
+- Namespace-scoped policies, ClusterApprovalPolicy for cluster-wide rules
+
+### Phase 6: Slack Integration
 - Integrate Slack escalation workflow
 - Implement approval/rejection via Slack bot
-
-### Phase 5: TerraformApprovalPolicy for L0 Controllers
-- Extend to Terraform plan-based detection
-- Add TerraformApprovalPolicy CRD
+- "Add Exception" dialog to create ApprovalPolicy rules
 
 ## Rationale
 

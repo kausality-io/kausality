@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-logr/logr"
 
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/kausality-io/kausality/pkg/callback"
 	"github.com/kausality-io/kausality/pkg/config"
 	"github.com/kausality-io/kausality/pkg/webhook"
 )
@@ -37,6 +39,13 @@ func main() {
 		certDir                string
 		healthProbeBindAddress string
 		configFile             string
+
+		// Drift callback webhook flags
+		driftWebhookURL           string
+		driftWebhookCA            string
+		driftWebhookTimeout       time.Duration
+		driftWebhookRetryCount    int
+		driftWebhookRetryInterval time.Duration
 	)
 
 	flag.StringVar(&host, "host", "", "The address to bind to (default: all interfaces)")
@@ -44,6 +53,13 @@ func main() {
 	flag.StringVar(&certDir, "cert-dir", "/etc/webhook/certs", "The directory containing tls.crt and tls.key")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address for health probes")
 	flag.StringVar(&configFile, "config", "", "Path to config file (optional)")
+
+	// Drift callback webhook flags
+	flag.StringVar(&driftWebhookURL, "drift-webhook-url", "", "URL for drift notification webhook (optional)")
+	flag.StringVar(&driftWebhookCA, "drift-webhook-ca", "", "Path to CA certificate for drift webhook TLS verification")
+	flag.DurationVar(&driftWebhookTimeout, "drift-webhook-timeout", 10*time.Second, "Timeout for drift webhook requests")
+	flag.IntVar(&driftWebhookRetryCount, "drift-webhook-retry-count", 3, "Number of retries for drift webhook requests")
+	flag.DurationVar(&driftWebhookRetryInterval, "drift-webhook-retry-interval", 1*time.Second, "Interval between drift webhook retries")
 
 	opts := zap.Options{
 		Development: true,
@@ -60,6 +76,7 @@ func main() {
 		"certDir", certDir,
 		"healthProbeBindAddress", healthProbeBindAddress,
 		"configFile", configFile,
+		"driftWebhookURL", driftWebhookURL,
 	)
 
 	// Create Kubernetes client
@@ -93,6 +110,28 @@ func main() {
 		)
 	}
 
+	// Create callback sender if URL is configured
+	var callbackSender *callback.Sender
+	if driftWebhookURL != "" {
+		callbackSender, err = callback.NewSender(callback.SenderConfig{
+			URL:           driftWebhookURL,
+			CAFile:        driftWebhookCA,
+			Timeout:       driftWebhookTimeout,
+			RetryCount:    driftWebhookRetryCount,
+			RetryInterval: driftWebhookRetryInterval,
+			Log:           log,
+		})
+		if err != nil {
+			log.Error(err, "unable to create drift callback sender")
+			os.Exit(1)
+		}
+		log.Info("drift callback enabled",
+			"url", driftWebhookURL,
+			"timeout", driftWebhookTimeout,
+			"retryCount", driftWebhookRetryCount,
+		)
+	}
+
 	// Create and start webhook server
 	server := webhook.NewServer(webhook.Config{
 		Client:                 k8sClient,
@@ -102,6 +141,7 @@ func main() {
 		CertDir:                certDir,
 		HealthProbeBindAddress: healthProbeBindAddress,
 		DriftConfig:            driftConfig,
+		CallbackSender:         callbackSender,
 	})
 
 	server.Register()

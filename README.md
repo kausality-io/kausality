@@ -259,6 +259,10 @@ kausality/
 ├── pkg/
 │   ├── admission/            # Admission webhook handler
 │   ├── approval/             # Approval/rejection annotation handling
+│   ├── callback/             # Drift notification webhook callbacks
+│   │   ├── v1alpha1/         # DriftReport API types
+│   │   ├── sender.go         # HTTP client for webhook calls
+│   │   └── tracker.go        # ID tracking for deduplication
 │   ├── config/               # Configuration types and loading
 │   ├── drift/                # Core drift detection logic
 │   │   ├── types.go          # DriftResult, ParentState types
@@ -296,8 +300,9 @@ kausality/
   - [x] Enforce mode (per-G/GR configuration)
   - [x] Approval pruning (mode=once consumed after use)
 
-- [ ] **Phase 4**: ApprovalPolicy CRD and Slack integration
-- [ ] **Phase 5**: TerraformApprovalPolicy for L0 controllers
+- [ ] **Phase 4**: Drift notification webhook callbacks
+- [ ] **Phase 5**: ApprovalPolicy CRD
+- [ ] **Phase 6**: Slack integration
 
 ## License
 

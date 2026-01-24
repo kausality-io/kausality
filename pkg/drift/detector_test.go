@@ -1,11 +1,11 @@
 package drift
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -332,8 +332,4 @@ func TestParentRef_String(t *testing.T) {
 			assert.Equal(t, tt.expect, tt.ref.String())
 		})
 	}
-}
-
-func containsString(s, substr string) bool {
-	return strings.Contains(s, substr)
 }

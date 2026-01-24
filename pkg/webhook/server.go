@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/kausality-io/kausality/pkg/admission"
+	"github.com/kausality-io/kausality/pkg/callback"
 	"github.com/kausality-io/kausality/pkg/config"
 )
 
@@ -39,6 +40,9 @@ type Config struct {
 	// DriftConfig provides per-resource drift detection configuration.
 	// If nil, defaults to log mode for all resources.
 	DriftConfig *config.Config
+	// CallbackSender sends drift reports to webhook endpoints.
+	// If nil, drift callbacks are disabled.
+	CallbackSender *callback.Sender
 }
 
 // Server is a standalone webhook server for drift detection.
@@ -86,9 +90,10 @@ func NewServer(cfg Config) *Server {
 // Register registers the admission handler with the webhook server.
 func (s *Server) Register() {
 	handler := admission.NewHandler(admission.Config{
-		Client:      s.config.Client,
-		Log:         s.log,
-		DriftConfig: s.config.DriftConfig,
+		Client:         s.config.Client,
+		Log:            s.log,
+		DriftConfig:    s.config.DriftConfig,
+		CallbackSender: s.config.CallbackSender,
 	})
 
 	s.webhookServer.Register("/mutate", &webhook.Admission{Handler: handler})

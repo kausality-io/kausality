@@ -18,6 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kausality-io/kausality/pkg/approval"
+	"github.com/kausality-io/kausality/pkg/callback"
+	"github.com/kausality-io/kausality/pkg/callback/v1alpha1"
 	"github.com/kausality-io/kausality/pkg/config"
 	"github.com/kausality-io/kausality/pkg/drift"
 	"github.com/kausality-io/kausality/pkg/trace"
@@ -30,6 +32,7 @@ type Handler struct {
 	detector        *drift.Detector
 	propagator      *trace.Propagator
 	approvalChecker *approval.Checker
+	callbackSender  *callback.Sender
 	config          *config.Config
 	log             logr.Logger
 }
@@ -41,6 +44,9 @@ type Config struct {
 	// DriftConfig provides per-resource drift detection configuration.
 	// If nil, defaults to log mode for all resources.
 	DriftConfig *config.Config
+	// CallbackSender sends drift reports to webhook endpoints.
+	// If nil, drift callbacks are disabled.
+	CallbackSender *callback.Sender
 }
 
 // NewHandler creates a new admission Handler.
@@ -54,6 +60,7 @@ func NewHandler(cfg Config) *Handler {
 		detector:        drift.NewDetector(cfg.Client),
 		propagator:      trace.NewPropagator(cfg.Client),
 		approvalChecker: approval.NewChecker(),
+		callbackSender:  cfg.CallbackSender,
 		config:          driftConfig,
 		log:             cfg.Log.WithName("kausality-admission"),
 	}
@@ -147,9 +154,13 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 			log.Info("DRIFT APPROVED", append(logFields, "approvalReason", approvalResult.Reason)...)
 			// Consume mode=once approvals and prune stale ones
 			h.consumeApproval(ctx, approvalResult, log)
+			// Send resolved notification
+			h.sendDriftCallback(ctx, req, obj, driftResult, v1alpha1.DriftReportPhaseResolved, log)
 		} else {
 			driftMsg := "drift detected: no approval found for this mutation"
 			log.Info("DRIFT DETECTED - no approval found", logFields...)
+			// Send drift detected notification
+			h.sendDriftCallback(ctx, req, obj, driftResult, v1alpha1.DriftReportPhaseDetected, log)
 			if enforceMode {
 				return admission.Denied(driftMsg)
 			}
@@ -495,4 +506,131 @@ func extractFieldManager(req admission.Request) string {
 	}
 
 	return ""
+}
+
+// sendDriftCallback sends a drift report to the configured webhook endpoint.
+func (h *Handler) sendDriftCallback(ctx context.Context, req admission.Request, obj client.Object, driftResult *drift.DriftResult, phase v1alpha1.DriftReportPhase, log logr.Logger) {
+	if h.callbackSender == nil || !h.callbackSender.IsEnabled() {
+		return
+	}
+
+	report := h.buildDriftReport(req, obj, driftResult, phase)
+	if report == nil {
+		return
+	}
+
+	// Send asynchronously to avoid blocking admission
+	h.callbackSender.SendAsync(ctx, report)
+	log.V(1).Info("drift callback sent", "phase", phase, "id", report.Spec.ID)
+}
+
+// buildDriftReport constructs a DriftReport from the admission context.
+func (h *Handler) buildDriftReport(req admission.Request, obj client.Object, driftResult *drift.DriftResult, phase v1alpha1.DriftReportPhase) *v1alpha1.DriftReport {
+	if driftResult.ParentRef == nil {
+		return nil
+	}
+
+	gvk := obj.GetObjectKind().GroupVersionKind()
+
+	// Build object references
+	parentRef := v1alpha1.ObjectReference{
+		APIVersion: driftResult.ParentRef.APIVersion,
+		Kind:       driftResult.ParentRef.Kind,
+		Namespace:  driftResult.ParentRef.Namespace,
+		Name:       driftResult.ParentRef.Name,
+	}
+
+	childRef := v1alpha1.ObjectReference{
+		APIVersion: gvk.GroupVersion().String(),
+		Kind:       gvk.Kind,
+		Namespace:  obj.GetNamespace(),
+		Name:       obj.GetName(),
+		UID:        obj.GetUID(),
+		Generation: obj.GetGeneration(),
+	}
+
+	// Generate ID based on phase
+	var id string
+	if phase == v1alpha1.DriftReportPhaseDetected {
+		// For detected phase, include spec diff in ID
+		specDiff := computeSpecDiff(req)
+		id = callback.GenerateDriftID(parentRef, childRef, specDiff)
+	} else {
+		// For resolved phase, use simpler ID
+		id = callback.GenerateResolutionID(parentRef, childRef)
+	}
+
+	// Build request context
+	reqCtx := v1alpha1.RequestContext{
+		User:         req.UserInfo.Username,
+		Groups:       req.UserInfo.Groups,
+		UID:          string(req.UID),
+		FieldManager: extractFieldManager(req),
+		Operation:    string(req.Operation),
+	}
+
+	// Build detection context
+	detCtx := v1alpha1.DetectionContext{
+		LifecyclePhase: string(driftResult.LifecyclePhase),
+	}
+
+	report := &v1alpha1.DriftReport{
+		Spec: v1alpha1.DriftReportSpec{
+			ID:        id,
+			Phase:     phase,
+			Parent:    parentRef,
+			Child:     childRef,
+			Request:   reqCtx,
+			Detection: detCtx,
+		},
+	}
+
+	// Include old/new objects for UPDATE operations
+	switch req.Operation {
+	case admissionv1.Update:
+		if len(req.OldObject.Raw) > 0 {
+			report.Spec.OldObject = runtime.RawExtension{Raw: req.OldObject.Raw}
+		}
+		if len(req.Object.Raw) > 0 {
+			report.Spec.NewObject = runtime.RawExtension{Raw: req.Object.Raw}
+		}
+	case admissionv1.Create:
+		if len(req.Object.Raw) > 0 {
+			report.Spec.NewObject = runtime.RawExtension{Raw: req.Object.Raw}
+		}
+	}
+
+	return report
+}
+
+// computeSpecDiff computes a hash-able representation of the spec change.
+func computeSpecDiff(req admission.Request) []byte {
+	if req.Operation != admissionv1.Update {
+		return req.Object.Raw
+	}
+
+	// For updates, extract just the spec fields for comparison
+	oldObj := &unstructured.Unstructured{}
+	newObj := &unstructured.Unstructured{}
+
+	if err := runtime.DecodeInto(unstructured.UnstructuredJSONScheme, req.OldObject.Raw, oldObj); err != nil {
+		return req.Object.Raw
+	}
+	if err := runtime.DecodeInto(unstructured.UnstructuredJSONScheme, req.Object.Raw, newObj); err != nil {
+		return req.Object.Raw
+	}
+
+	oldSpec, _, _ := unstructured.NestedFieldCopy(oldObj.Object, "spec")
+	newSpec, _, _ := unstructured.NestedFieldCopy(newObj.Object, "spec")
+
+	// Create a diff representation
+	diff := map[string]interface{}{
+		"old": oldSpec,
+		"new": newSpec,
+	}
+	diffBytes, err := json.Marshal(diff)
+	if err != nil {
+		return req.Object.Raw
+	}
+	return diffBytes
 }
