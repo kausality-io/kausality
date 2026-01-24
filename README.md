@@ -225,13 +225,23 @@ kausality/
 
 ## Roadmap
 
-- [x] **Phase 1**: Logging only (current)
+- [x] **Phase 1**: Logging only
   - Detect drift via generation/observedGeneration comparison
+  - Controller identification via managedFields
   - Log when drift would be blocked
   - Support both library mode and webhook mode
 
-- [ ] **Phase 2**: Request-trace annotation propagation
-- [ ] **Phase 3**: Per-object approval annotations
+- [x] **Phase 2**: Request-trace annotation propagation
+  - Trace causal chain through controller hierarchy
+  - New origins for different actors, extend for controller hops
+
+- [ ] **Phase 3**: Per-object approval annotations *(in progress)*
+  - [x] Approval types (once, generation, always)
+  - [x] Rejection support
+  - [x] Approval checking in handler
+  - [ ] Enforce mode (per-G/GR configuration)
+  - [ ] Approval pruning on parent generation change
+
 - [ ] **Phase 4**: ApprovalPolicy CRD and Slack integration
 - [ ] **Phase 5**: TerraformApprovalPolicy for L0 controllers
 
