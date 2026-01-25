@@ -317,7 +317,17 @@ kausality/
 
 ## Documentation
 
-- [Design Document](doc/design/INDEX.md) — Full design specification for admission-only drift detection
+**Design:**
+- [Design Overview](doc/design/INDEX.md) — Core concepts and quick reference
+- [Drift Detection](doc/design/DRIFT_DETECTION.md) — Controller identification, annotation protection, lifecycle phases
+- [Approvals](doc/design/APPROVALS.md) — Approval/rejection annotations, modes, freeze/snooze
+- [Tracing](doc/design/TRACING.md) — Request trace propagation through controller hierarchy
+- [Callbacks](doc/design/CALLBACKS.md) — Drift notification webhooks, DriftReport API
+- [Deployment](doc/design/DEPLOYMENT.md) — Library vs webhook mode, Helm configuration
+
+**Reference:**
+- [Architecture Decisions](doc/ADR.md) — Rationale, trade-offs, alternatives
+- [Roadmap](doc/ROADMAP.md) — Implementation phases and status
 
 ## Roadmap
 
