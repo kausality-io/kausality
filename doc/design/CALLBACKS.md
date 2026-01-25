@@ -27,7 +27,6 @@ spec:
     name: prod
     generation: 5
     observedGeneration: 5
-    controllerManager: "eks-controller"
     lifecyclePhase: "Initialized"
   child:
     apiVersion: v1
@@ -51,7 +50,7 @@ spec:
 
 **Key design decisions:**
 - No `ObjectMeta` — transient type with no persistence, only `TypeMeta` for API identification
-- Parent includes `observedGeneration`, `controllerManager`, `lifecyclePhase` — all detection context in one place
+- Parent includes `observedGeneration`, `lifecyclePhase` — all detection context in one place
 - Uses `runtime.RawExtension` for embedded objects (standard Kubernetes type)
 - `newObject` is required, `oldObject` is optional (only for UPDATE)
 
