@@ -111,6 +111,21 @@ wait_for "provider-nop to be healthy" \
     "kubectl get provider provider-nop -o jsonpath='{.status.conditions[?(@.type==\"Healthy\")].status}' | grep -q True" \
     120
 
+log "Installing function-patch-and-transform (for pipeline compositions)..."
+kubectl apply -f - <<EOF
+apiVersion: pkg.crossplane.io/v1beta1
+kind: Function
+metadata:
+  name: function-patch-and-transform
+spec:
+  package: xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.7.0
+EOF
+
+log "Waiting for function-patch-and-transform to be healthy..."
+wait_for "function-patch-and-transform to be healthy" \
+    "kubectl get function function-patch-and-transform -o jsonpath='{.status.conditions[?(@.type==\"Healthy\")].status}' | grep -q True" \
+    120
+
 log "Building and loading kausality images with ko..."
 cd "${ROOT_DIR}"
 export KO_DOCKER_REPO="ko.local"
@@ -140,6 +155,9 @@ helm upgrade --install kausality "${ROOT_DIR}/charts/kausality" \
     --set 'resourceRules.include[0].resources={*}' \
     --set 'resourceRules.include[1].apiGroups={apps}' \
     --set 'resourceRules.include[1].resources={deployments,replicasets}' \
+    --set 'resourceRules.include[2].apiGroups={test.kausality.io}' \
+    --set 'resourceRules.include[2].resources={*}' \
+    --set driftDetection.defaultMode=enforce \
     --set logging.development=true \
     --wait \
     --timeout "${TIMEOUT}"
