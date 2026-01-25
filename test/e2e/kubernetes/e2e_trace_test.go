@@ -38,7 +38,7 @@ func TestTracePropagation(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: testNamespace,
-			Labels: map[string]string{
+			Annotations: map[string]string{
 				"kausality.io/trace-ticket": "TEST-123",
 				"kausality.io/trace-pr":     "PR-456",
 			},
