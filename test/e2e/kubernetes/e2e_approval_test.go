@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,19 +20,27 @@ import (
 )
 
 // =============================================================================
-// Approval Annotation Tests
+// Drift and Approval Tests
+//
+// Drift = controller modifying a child's spec when the parent is stable (gen == obsGen).
+// We trigger drift by directly editing the ReplicaSet's spec.replicas, causing
+// the Deployment controller to try to "fix" it back to the desired count.
+//
+// Note: Kausality only intercepts spec changes - metadata/status changes are ignored.
 // =============================================================================
 
-// TestApprovalAnnotation verifies that kausality.io/approvals annotation allows
-// drift to pass in enforce mode.
-func TestApprovalAnnotation(t *testing.T) {
+// TestDriftBlockedInEnforceMode verifies that drift is blocked in enforce mode
+// when there is no approval annotation.
+func TestDriftBlockedInEnforceMode(t *testing.T) {
 	ctx := context.Background()
 
-	t.Log("=== Testing Approval Annotation ===")
-	t.Log("When a parent has an approval for a child, drift should be allowed in enforce mode.")
+	t.Log("=== Testing Drift Blocked in Enforce Mode ===")
+	t.Log("When we directly modify a ReplicaSet's spec and the Deployment controller tries to fix it,")
+	t.Log("that fix attempt is drift (controller updating when parent is stable).")
+	t.Log("In enforce mode without approval, drift should be blocked.")
 
 	// Step 1: Create a namespace with enforce mode
-	enforceNS := fmt.Sprintf("approve-test-%s", rand.String(4))
+	enforceNS := fmt.Sprintf("drift-block-%s", rand.String(4))
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: enforceNS,
@@ -50,8 +57,254 @@ func TestApprovalAnnotation(t *testing.T) {
 	})
 	t.Logf("Created namespace %s with enforce mode", enforceNS)
 
-	// Step 2: Create a Deployment
-	name := fmt.Sprintf("approve-deploy-%s", rand.String(4))
+	// Step 2: Create a Deployment with 1 replica
+	name := fmt.Sprintf("drift-block-%s", rand.String(4))
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: enforceNS,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(int32(1)),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": name},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"app": name},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "nginx",
+						Image: "nginx:1.24-alpine",
+					}},
+				},
+			},
+		},
+	}
+
+	_, err = clientset.AppsV1().Deployments(enforceNS).Create(ctx, deployment, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Logf("Created Deployment %s with 1 replica", name)
+
+	// Step 3: Wait for stabilization (gen == obsGen)
+	ktesting.Eventually(t, func() (bool, string) {
+		dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting deployment: %v", err)
+		}
+		if dep.Status.ObservedGeneration != dep.Generation {
+			return false, fmt.Sprintf("not stable: gen=%d, obsGen=%d", dep.Generation, dep.Status.ObservedGeneration)
+		}
+		if dep.Status.AvailableReplicas < 1 {
+			return false, fmt.Sprintf("not available: replicas=%d", dep.Status.AvailableReplicas)
+		}
+		return true, "deployment stabilized"
+	}, defaultTimeout, defaultInterval, "deployment should stabilize")
+	t.Log("Deployment stabilized (gen == obsGen)")
+
+	// Step 4: Get the ReplicaSet
+	var rs *appsv1.ReplicaSet
+	ktesting.Eventually(t, func() (bool, string) {
+		rsList, err := clientset.AppsV1().ReplicaSets(enforceNS).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", name),
+		})
+		if err != nil {
+			return false, fmt.Sprintf("error listing replicasets: %v", err)
+		}
+		if len(rsList.Items) == 0 {
+			return false, "no replicaset found"
+		}
+		rs = &rsList.Items[0]
+		return true, fmt.Sprintf("found replicaset %s with %d replicas", rs.Name, *rs.Spec.Replicas)
+	}, defaultTimeout, defaultInterval, "replicaset should exist")
+
+	// Step 5: Directly modify the ReplicaSet's spec.replicas (simulate external drift)
+	// Change from 1 to 2 - the Deployment controller will want to set it back to 1
+	rs.Spec.Replicas = ptr(int32(2))
+	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	t.Log("Directly modified ReplicaSet spec.replicas from 1 to 2")
+
+	// Step 6: Wait for controller to attempt reconciliation
+	// The controller will try to set replicas back to 1, but that's drift and should be blocked
+	t.Log("Waiting for controller to attempt reconciliation (which should be blocked)...")
+
+	// Step 7: Verify our modification persists (controller couldn't fix it)
+	// The ReplicaSet should still have 2 replicas because the controller's fix was blocked
+	ktesting.Eventually(t, func() (bool, string) {
+		rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rs.Name, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting replicaset: %v", err)
+		}
+		if *rs.Spec.Replicas != 2 {
+			return false, fmt.Sprintf("replicas changed to %d (drift was allowed!)", *rs.Spec.Replicas)
+		}
+		return true, "replicas still 2 (drift blocked)"
+	}, defaultTimeout, defaultInterval, "drift should be blocked")
+
+	t.Log("")
+	t.Log("SUCCESS: Drift was blocked - our modification to the ReplicaSet persisted")
+}
+
+// TestApprovalAllowsDrift verifies that kausality.io/approvals annotation allows
+// drift to pass in enforce mode.
+func TestApprovalAllowsDrift(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("=== Testing Approval Allows Drift ===")
+	t.Log("When we directly modify a ReplicaSet's spec and the Deployment controller tries to fix it,")
+	t.Log("with an approval annotation on the Deployment, the drift should be allowed.")
+
+	// Step 1: Create a namespace with enforce mode
+	enforceNS := fmt.Sprintf("approve-drift-%s", rand.String(4))
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: enforceNS,
+			Annotations: map[string]string{
+				"kausality.io/mode": "enforce",
+			},
+		},
+	}
+	_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		t.Logf("Cleanup: Deleting namespace %s", enforceNS)
+		_ = clientset.CoreV1().Namespaces().Delete(ctx, enforceNS, metav1.DeleteOptions{})
+	})
+	t.Logf("Created namespace %s with enforce mode", enforceNS)
+
+	// Step 2: Create a Deployment with approval for all ReplicaSets
+	name := fmt.Sprintf("approve-drift-%s", rand.String(4))
+
+	approvals := []approval.Approval{{
+		APIVersion: "apps/v1",
+		Kind:       "ReplicaSet",
+		Name:       "*", // Approve all ReplicaSets
+		Mode:       approval.ModeAlways,
+	}}
+	approvalData, err := json.Marshal(approvals)
+	require.NoError(t, err)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: enforceNS,
+			Annotations: map[string]string{
+				approval.ApprovalsAnnotation: string(approvalData),
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(int32(1)),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": name},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"app": name},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "nginx",
+						Image: "nginx:1.24-alpine",
+					}},
+				},
+			},
+		},
+	}
+
+	_, err = clientset.AppsV1().Deployments(enforceNS).Create(ctx, deployment, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Logf("Created Deployment %s with approval annotation", name)
+
+	// Step 3: Wait for stabilization (gen == obsGen)
+	ktesting.Eventually(t, func() (bool, string) {
+		dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting deployment: %v", err)
+		}
+		if dep.Status.ObservedGeneration != dep.Generation {
+			return false, fmt.Sprintf("not stable: gen=%d, obsGen=%d", dep.Generation, dep.Status.ObservedGeneration)
+		}
+		if dep.Status.AvailableReplicas < 1 {
+			return false, fmt.Sprintf("not available: replicas=%d", dep.Status.AvailableReplicas)
+		}
+		return true, "deployment stabilized"
+	}, defaultTimeout, defaultInterval, "deployment should stabilize")
+	t.Log("Deployment stabilized (gen == obsGen)")
+
+	// Step 4: Get the ReplicaSet
+	var rsName string
+	ktesting.Eventually(t, func() (bool, string) {
+		rsList, err := clientset.AppsV1().ReplicaSets(enforceNS).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", name),
+		})
+		if err != nil {
+			return false, fmt.Sprintf("error listing replicasets: %v", err)
+		}
+		if len(rsList.Items) == 0 {
+			return false, "no replicaset found"
+		}
+		rsName = rsList.Items[0].Name
+		return true, fmt.Sprintf("found replicaset %s", rsName)
+	}, defaultTimeout, defaultInterval, "replicaset should exist")
+
+	// Step 5: Directly modify the ReplicaSet's spec.replicas (simulate external drift)
+	rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	rs.Spec.Replicas = ptr(int32(2))
+	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	t.Log("Directly modified ReplicaSet spec.replicas from 1 to 2")
+
+	// Step 6: Wait for controller to fix the drift (should be allowed with approval)
+	t.Log("Waiting for controller to reconcile (drift should be allowed with approval)...")
+
+	// Step 7: Verify the controller was able to fix it (replicas should be back to 1)
+	ktesting.Eventually(t, func() (bool, string) {
+		rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting replicaset: %v", err)
+		}
+		if *rs.Spec.Replicas != 1 {
+			return false, fmt.Sprintf("replicas still %d (controller hasn't reconciled yet)", *rs.Spec.Replicas)
+		}
+		return true, "replicas back to 1 (controller reconciled successfully)"
+	}, defaultTimeout, defaultInterval, "controller should fix the drift")
+
+	t.Log("")
+	t.Log("SUCCESS: Drift was allowed - controller successfully fixed the ReplicaSet")
+}
+
+// TestRejectionBlocksDrift verifies that kausality.io/rejections annotation blocks
+// drift even when there might otherwise be approval.
+func TestRejectionBlocksDrift(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("=== Testing Rejection Blocks Drift ===")
+	t.Log("When a parent has a rejection for a child, drift should be blocked.")
+
+	// Step 1: Create a namespace with enforce mode
+	enforceNS := fmt.Sprintf("reject-drift-%s", rand.String(4))
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: enforceNS,
+			Annotations: map[string]string{
+				"kausality.io/mode": "enforce",
+			},
+		},
+	}
+	_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		t.Logf("Cleanup: Deleting namespace %s", enforceNS)
+		_ = clientset.CoreV1().Namespaces().Delete(ctx, enforceNS, metav1.DeleteOptions{})
+	})
+	t.Logf("Created namespace %s with enforce mode", enforceNS)
+
+	// Step 2: Create a Deployment (no rejection yet - add it after stabilization)
+	name := fmt.Sprintf("reject-drift-%s", rand.String(4))
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -112,252 +365,53 @@ func TestApprovalAnnotation(t *testing.T) {
 		return true, fmt.Sprintf("found replicaset %s", rsName)
 	}, defaultTimeout, defaultInterval, "replicaset should exist")
 
-	// Step 5: Add approval annotation to the Deployment for the expected new ReplicaSet
+	// Step 5: Add rejection annotation to the Deployment
 	dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
 	require.NoError(t, err)
 
-	// The new ReplicaSet will have a different name, so we use a wildcard-like approval
-	// by approving "mode: always" for any ReplicaSet
-	approvals := []approval.Approval{{
-		APIVersion: "apps/v1",
-		Kind:       "ReplicaSet",
-		Name:       "*", // Note: This won't match exactly, but let's test with specific name
-		Mode:       approval.ModeAlways,
-	}}
-
-	// Actually, let's predict the new RS name pattern or use generation-based approval
-	// For this test, we'll add an approval that matches any RS update
-	approvalData, err := json.Marshal(approvals)
-	require.NoError(t, err)
-
-	if dep.Annotations == nil {
-		dep.Annotations = make(map[string]string)
-	}
-	dep.Annotations[approval.ApprovalsAnnotation] = string(approvalData)
-	_, err = clientset.AppsV1().Deployments(enforceNS).Update(ctx, dep, metav1.UpdateOptions{})
-	require.NoError(t, err)
-	t.Log("Added approval annotation to Deployment")
-
-	// Step 6: Update the Deployment to trigger a new ReplicaSet
-	dep, err = clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
-	require.NoError(t, err)
-
-	dep.Spec.Template.Spec.Containers[0].Image = "nginx:1.25-alpine"
-	_, err = clientset.AppsV1().Deployments(enforceNS).Update(ctx, dep, metav1.UpdateOptions{})
-	require.NoError(t, err)
-	t.Log("Updated Deployment image - this should trigger drift but be approved")
-
-	// Step 7: Verify rollout completes (not blocked by enforce mode)
-	ktesting.Eventually(t, func() (bool, string) {
-		dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return false, fmt.Sprintf("error getting deployment: %v", err)
-		}
-		if dep.Status.ObservedGeneration != dep.Generation {
-			return false, "rollout in progress"
-		}
-		if dep.Status.AvailableReplicas != *dep.Spec.Replicas {
-			return false, fmt.Sprintf("not available: available=%d, desired=%d", dep.Status.AvailableReplicas, *dep.Spec.Replicas)
-		}
-		return true, "rollout complete"
-	}, defaultTimeout, defaultInterval, "rollout should complete")
-
-	t.Log("")
-	t.Log("SUCCESS: Rollout completed with approval annotation in enforce mode")
-}
-
-// TestRejectionAnnotation verifies that kausality.io/rejections annotation blocks
-// drift even with approval.
-func TestRejectionAnnotation(t *testing.T) {
-	ctx := context.Background()
-
-	t.Log("=== Testing Rejection Annotation ===")
-	t.Log("When a parent has a rejection for a child, drift should be blocked.")
-
-	// Step 1: Create a namespace with enforce mode
-	enforceNS := fmt.Sprintf("reject-test-%s", rand.String(4))
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: enforceNS,
-			Annotations: map[string]string{
-				"kausality.io/mode": "enforce",
-			},
-		},
-	}
-	_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		t.Logf("Cleanup: Deleting namespace %s", enforceNS)
-		_ = clientset.CoreV1().Namespaces().Delete(ctx, enforceNS, metav1.DeleteOptions{})
-	})
-	t.Logf("Created namespace %s with enforce mode", enforceNS)
-
-	// Step 2: Create a Deployment with a rejection annotation
-	name := fmt.Sprintf("reject-deploy-%s", rand.String(4))
-
-	// Pre-create rejection for the ReplicaSet that will be created
 	rejections := []approval.Rejection{{
 		APIVersion: "apps/v1",
 		Kind:       "ReplicaSet",
-		Name:       "*", // Reject all ReplicaSets
+		Name:       rsName,
 		Reason:     "frozen by test",
 	}}
 	rejectionData, err := json.Marshal(rejections)
 	require.NoError(t, err)
 
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: enforceNS,
-			Annotations: map[string]string{
-				approval.RejectionsAnnotation: string(rejectionData),
-			},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(int32(1)),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": name},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{"app": name},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "nginx",
-						Image: "nginx:alpine",
-					}},
-				},
-			},
-		},
+	if dep.Annotations == nil {
+		dep.Annotations = make(map[string]string)
 	}
-
-	// Note: The rejection is for ReplicaSets. When the Deployment is created,
-	// the controller will try to create a ReplicaSet which should be rejected.
-	// However, since this is a CREATE (not drift), it may not be blocked.
-	// Drift detection applies to mutations from controllers on stable parents.
-
-	_, err = clientset.AppsV1().Deployments(enforceNS).Create(ctx, deployment, metav1.CreateOptions{})
-	require.NoError(t, err)
-	t.Logf("Created Deployment %s with rejection annotation", name)
-
-	// For this test, we just verify the rejection annotation is preserved
-	dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Contains(t, dep.Annotations, approval.RejectionsAnnotation)
-	t.Log("Rejection annotation is set on Deployment")
-
-	t.Log("")
-	t.Log("SUCCESS: Rejection annotation test completed")
-}
-
-// TestSnoozeAnnotation verifies that kausality.io/snooze-until annotation
-// temporarily pauses drift enforcement.
-func TestSnoozeAnnotation(t *testing.T) {
-	ctx := context.Background()
-
-	t.Log("=== Testing Snooze Annotation ===")
-	t.Log("When a parent has a snooze-until annotation, drift enforcement should be paused.")
-
-	// Step 1: Create a namespace with enforce mode
-	enforceNS := fmt.Sprintf("snooze-test-%s", rand.String(4))
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: enforceNS,
-			Annotations: map[string]string{
-				"kausality.io/mode": "enforce",
-			},
-		},
-	}
-	_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		t.Logf("Cleanup: Deleting namespace %s", enforceNS)
-		_ = clientset.CoreV1().Namespaces().Delete(ctx, enforceNS, metav1.DeleteOptions{})
-	})
-	t.Logf("Created namespace %s with enforce mode", enforceNS)
-
-	// Step 2: Create a Deployment with snooze annotation (1 hour from now)
-	name := fmt.Sprintf("snooze-deploy-%s", rand.String(4))
-	snoozeUntil := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
-
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: enforceNS,
-			Annotations: map[string]string{
-				approval.SnoozeAnnotation: snoozeUntil,
-			},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr(int32(1)),
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": name},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{"app": name},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{{
-						Name:  "nginx",
-						Image: "nginx:1.24-alpine",
-					}},
-				},
-			},
-		},
-	}
-
-	_, err = clientset.AppsV1().Deployments(enforceNS).Create(ctx, deployment, metav1.CreateOptions{})
-	require.NoError(t, err)
-	t.Logf("Created Deployment %s with snooze annotation until %s", name, snoozeUntil)
-
-	// Step 3: Wait for stabilization
-	ktesting.Eventually(t, func() (bool, string) {
-		dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return false, fmt.Sprintf("error getting deployment: %v", err)
-		}
-		if dep.Status.ObservedGeneration != dep.Generation {
-			return false, fmt.Sprintf("not stable: gen=%d, obsGen=%d", dep.Generation, dep.Status.ObservedGeneration)
-		}
-		if dep.Status.AvailableReplicas < 1 {
-			return false, fmt.Sprintf("not available: replicas=%d", dep.Status.AvailableReplicas)
-		}
-		return true, "deployment stabilized"
-	}, defaultTimeout, defaultInterval, "deployment should stabilize")
-	t.Log("Deployment stabilized")
-
-	// Step 4: Update the Deployment - should succeed because of snooze
-	dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
-	require.NoError(t, err)
-
-	dep.Spec.Template.Spec.Containers[0].Image = "nginx:1.25-alpine"
+	dep.Annotations[approval.RejectionsAnnotation] = string(rejectionData)
 	_, err = clientset.AppsV1().Deployments(enforceNS).Update(ctx, dep, metav1.UpdateOptions{})
 	require.NoError(t, err)
-	t.Log("Updated Deployment - should be allowed due to snooze")
+	t.Logf("Added rejection annotation to Deployment for ReplicaSet %s", rsName)
 
-	// Step 5: Verify rollout completes
+	// Step 6: Directly modify the ReplicaSet's spec.replicas
+	rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	rs.Spec.Replicas = ptr(int32(2))
+	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	t.Log("Directly modified ReplicaSet spec.replicas from 1 to 2")
+
+	// Step 7: Verify our modification persists (controller can't fix it due to rejection)
 	ktesting.Eventually(t, func() (bool, string) {
-		dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
+		rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
 		if err != nil {
-			return false, fmt.Sprintf("error getting deployment: %v", err)
+			return false, fmt.Sprintf("error getting replicaset: %v", err)
 		}
-		if dep.Status.ObservedGeneration != dep.Generation {
-			return false, "rollout in progress"
+		if *rs.Spec.Replicas != 2 {
+			return false, fmt.Sprintf("replicas changed to %d (drift was allowed despite rejection!)", *rs.Spec.Replicas)
 		}
-		if dep.Status.AvailableReplicas != *dep.Spec.Replicas {
-			return false, fmt.Sprintf("not available: available=%d, desired=%d", dep.Status.AvailableReplicas, *dep.Spec.Replicas)
-		}
-		return true, "rollout complete"
-	}, defaultTimeout, defaultInterval, "rollout should complete")
+		return true, "replicas still 2 (drift blocked by rejection)"
+	}, defaultTimeout, defaultInterval, "rejection should block drift")
 
-	// Verify snooze annotation is still present
+	// Verify rejection annotation is still present
 	dep, err = clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
 	require.NoError(t, err)
-	assert.Contains(t, dep.Annotations, approval.SnoozeAnnotation)
-	t.Logf("Snooze annotation preserved: %s", dep.Annotations[approval.SnoozeAnnotation])
+	assert.Contains(t, dep.Annotations, approval.RejectionsAnnotation)
 
 	t.Log("")
-	t.Log("SUCCESS: Rollout completed with snooze annotation in enforce mode")
+	t.Log("SUCCESS: Drift was blocked by rejection annotation")
 }
