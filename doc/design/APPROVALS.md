@@ -24,6 +24,7 @@ metadata:
 
 - Namespace is implicit (same as parent) — only applies to namespaced resources
 - `generation` field is only required for `once` and `generation` modes, not for `always`
+- Wildcards: `"*"` matches any value for apiVersion, kind, or name
 - Admission plugin prunes approvals when parent generation changes
 
 ## Approval Modes
