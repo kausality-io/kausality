@@ -63,10 +63,20 @@ type ChildRef struct {
 }
 
 // Matches checks if this approval matches the given child.
+// Supports wildcards: "*" matches any value for apiVersion, kind, or name.
 func (a *Approval) Matches(child ChildRef) bool {
-	return a.APIVersion == child.APIVersion &&
-		a.Kind == child.Kind &&
-		a.Name == child.Name
+	return matchField(a.APIVersion, child.APIVersion) &&
+		matchField(a.Kind, child.Kind) &&
+		matchField(a.Name, child.Name)
+}
+
+// matchField checks if a pattern matches a value.
+// "*" matches any value.
+func matchField(pattern, value string) bool {
+	if pattern == "*" {
+		return true
+	}
+	return pattern == value
 }
 
 // IsValid checks if this approval is valid for the given parent generation.
@@ -87,10 +97,11 @@ func (a *Approval) IsValid(parentGeneration int64) bool {
 }
 
 // Matches checks if this rejection matches the given child.
+// Supports wildcards: "*" matches any value for apiVersion, kind, or name.
 func (r *Rejection) Matches(child ChildRef) bool {
-	return r.APIVersion == child.APIVersion &&
-		r.Kind == child.Kind &&
-		r.Name == child.Name
+	return matchField(r.APIVersion, child.APIVersion) &&
+		matchField(r.Kind, child.Kind) &&
+		matchField(r.Name, child.Name)
 }
 
 // IsActive checks if this rejection is active for the given parent generation.

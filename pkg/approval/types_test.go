@@ -7,42 +7,71 @@ import (
 )
 
 func TestApproval_Matches(t *testing.T) {
-	approval := Approval{
-		APIVersion: "v1",
-		Kind:       "ConfigMap",
-		Name:       "test-cm",
-	}
-
 	tests := []struct {
-		name  string
-		child ChildRef
-		want  bool
+		name     string
+		approval Approval
+		child    ChildRef
+		want     bool
 	}{
 		{
-			name:  "exact match",
-			child: ChildRef{APIVersion: "v1", Kind: "ConfigMap", Name: "test-cm"},
-			want:  true,
+			name:     "exact match",
+			approval: Approval{APIVersion: "v1", Kind: "ConfigMap", Name: "test-cm"},
+			child:    ChildRef{APIVersion: "v1", Kind: "ConfigMap", Name: "test-cm"},
+			want:     true,
 		},
 		{
-			name:  "different name",
-			child: ChildRef{APIVersion: "v1", Kind: "ConfigMap", Name: "other-cm"},
-			want:  false,
+			name:     "different name",
+			approval: Approval{APIVersion: "v1", Kind: "ConfigMap", Name: "test-cm"},
+			child:    ChildRef{APIVersion: "v1", Kind: "ConfigMap", Name: "other-cm"},
+			want:     false,
 		},
 		{
-			name:  "different kind",
-			child: ChildRef{APIVersion: "v1", Kind: "Secret", Name: "test-cm"},
-			want:  false,
+			name:     "different kind",
+			approval: Approval{APIVersion: "v1", Kind: "ConfigMap", Name: "test-cm"},
+			child:    ChildRef{APIVersion: "v1", Kind: "Secret", Name: "test-cm"},
+			want:     false,
 		},
 		{
-			name:  "different apiVersion",
-			child: ChildRef{APIVersion: "v2", Kind: "ConfigMap", Name: "test-cm"},
-			want:  false,
+			name:     "different apiVersion",
+			approval: Approval{APIVersion: "v1", Kind: "ConfigMap", Name: "test-cm"},
+			child:    ChildRef{APIVersion: "v2", Kind: "ConfigMap", Name: "test-cm"},
+			want:     false,
+		},
+		{
+			name:     "wildcard name matches any",
+			approval: Approval{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "*"},
+			child:    ChildRef{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "my-deploy-abc123"},
+			want:     true,
+		},
+		{
+			name:     "wildcard kind matches any",
+			approval: Approval{APIVersion: "v1", Kind: "*", Name: "test"},
+			child:    ChildRef{APIVersion: "v1", Kind: "ConfigMap", Name: "test"},
+			want:     true,
+		},
+		{
+			name:     "wildcard apiVersion matches any",
+			approval: Approval{APIVersion: "*", Kind: "Secret", Name: "creds"},
+			child:    ChildRef{APIVersion: "v1", Kind: "Secret", Name: "creds"},
+			want:     true,
+		},
+		{
+			name:     "all wildcards match anything",
+			approval: Approval{APIVersion: "*", Kind: "*", Name: "*"},
+			child:    ChildRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "foo"},
+			want:     true,
+		},
+		{
+			name:     "wildcard name still requires kind match",
+			approval: Approval{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "*"},
+			child:    ChildRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "foo"},
+			want:     false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, approval.Matches(tt.child))
+			assert.Equal(t, tt.want, tt.approval.Matches(tt.child))
 		})
 	}
 }
@@ -135,33 +164,41 @@ func TestApproval_IsValid(t *testing.T) {
 }
 
 func TestRejection_Matches(t *testing.T) {
-	rejection := Rejection{
-		APIVersion: "apps/v1",
-		Kind:       "Deployment",
-		Name:       "my-deploy",
-		Reason:     "Destructive change",
-	}
-
 	tests := []struct {
-		name  string
-		child ChildRef
-		want  bool
+		name      string
+		rejection Rejection
+		child     ChildRef
+		want      bool
 	}{
 		{
-			name:  "exact match",
-			child: ChildRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "my-deploy"},
-			want:  true,
+			name:      "exact match",
+			rejection: Rejection{APIVersion: "apps/v1", Kind: "Deployment", Name: "my-deploy", Reason: "test"},
+			child:     ChildRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "my-deploy"},
+			want:      true,
 		},
 		{
-			name:  "different name",
-			child: ChildRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "other"},
-			want:  false,
+			name:      "different name",
+			rejection: Rejection{APIVersion: "apps/v1", Kind: "Deployment", Name: "my-deploy", Reason: "test"},
+			child:     ChildRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "other"},
+			want:      false,
+		},
+		{
+			name:      "wildcard name matches any",
+			rejection: Rejection{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "*", Reason: "frozen"},
+			child:     ChildRef{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs-xyz-12345"},
+			want:      true,
+		},
+		{
+			name:      "wildcard name still requires kind match",
+			rejection: Rejection{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "*", Reason: "frozen"},
+			child:     ChildRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "deploy-xyz"},
+			want:      false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, rejection.Matches(tt.child))
+			assert.Equal(t, tt.want, tt.rejection.Matches(tt.child))
 		})
 	}
 }
