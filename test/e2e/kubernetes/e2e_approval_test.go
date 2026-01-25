@@ -692,3 +692,206 @@ func TestEnforceModeBlocksDrift(t *testing.T) {
 	t.Log("- Log mode: drift allowed, controller fixed replicas to 1")
 	t.Log("- Enforce mode: drift blocked, replicas stayed at 2")
 }
+
+// TestFreezeBlocksAllMutations verifies that kausality.io/freeze annotation
+// blocks ALL child mutations, even when there is an approval.
+func TestFreezeBlocksAllMutations(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("=== Testing Freeze Blocks All Mutations ===")
+	t.Log("When a parent has freeze=true, ALL child mutations are blocked,")
+	t.Log("even if there is an approval annotation. This is an emergency lockdown.")
+	t.Log("")
+	t.Log("This test proves freeze makes a difference by showing:")
+	t.Log("1. With approval alone, drift IS allowed (counter-example)")
+	t.Log("2. With approval + freeze, drift is BLOCKED (freeze wins)")
+
+	// Step 1: Create a namespace with enforce mode
+	enforceNS := fmt.Sprintf("freeze-test-%s", rand.String(4))
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: enforceNS,
+			Annotations: map[string]string{
+				"kausality.io/mode": "enforce",
+			},
+		},
+	}
+	_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		t.Logf("Cleanup: Deleting namespace %s", enforceNS)
+		_ = clientset.CoreV1().Namespaces().Delete(ctx, enforceNS, metav1.DeleteOptions{})
+	})
+	t.Logf("Created namespace %s with enforce mode", enforceNS)
+
+	// Step 2: Create a Deployment WITH approval for all ReplicaSets
+	t.Log("")
+	t.Log("Step 2: Creating Deployment WITH approval annotation...")
+	name := fmt.Sprintf("freeze-test-%s", rand.String(4))
+
+	approvals := []approval.Approval{{
+		APIVersion: "apps/v1",
+		Kind:       "ReplicaSet",
+		Name:       "*", // Approve all ReplicaSets
+		Mode:       approval.ModeAlways,
+	}}
+	approvalData, err := json.Marshal(approvals)
+	require.NoError(t, err)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: enforceNS,
+			Annotations: map[string]string{
+				approval.ApprovalsAnnotation: string(approvalData),
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr(int32(1)),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": name},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"app": name},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "nginx",
+						Image: "nginx:1.24-alpine",
+					}},
+				},
+			},
+		},
+	}
+
+	_, err = clientset.AppsV1().Deployments(enforceNS).Create(ctx, deployment, metav1.CreateOptions{})
+	require.NoError(t, err)
+	t.Logf("Created Deployment %s with approval annotation", name)
+
+	// Step 3: Wait for stabilization
+	ktesting.Eventually(t, func() (bool, string) {
+		dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting deployment: %v", err)
+		}
+		if dep.Status.ObservedGeneration != dep.Generation {
+			return false, fmt.Sprintf("not stable: gen=%d, obsGen=%d", dep.Generation, dep.Status.ObservedGeneration)
+		}
+		if dep.Status.AvailableReplicas < 1 {
+			return false, fmt.Sprintf("not available: replicas=%d", dep.Status.AvailableReplicas)
+		}
+		return true, "deployment stabilized"
+	}, defaultTimeout, defaultInterval, "deployment should stabilize")
+	t.Log("Deployment stabilized")
+
+	// Step 4: Get the ReplicaSet name
+	var rsName string
+	ktesting.Eventually(t, func() (bool, string) {
+		rsList, err := clientset.AppsV1().ReplicaSets(enforceNS).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", name),
+		})
+		if err != nil {
+			return false, fmt.Sprintf("error listing replicasets: %v", err)
+		}
+		if len(rsList.Items) == 0 {
+			return false, "no replicaset found"
+		}
+		rsName = rsList.Items[0].Name
+		return true, fmt.Sprintf("found replicaset %s", rsName)
+	}, defaultTimeout, defaultInterval, "replicaset should exist")
+
+	// Step 5: COUNTER-EXAMPLE - Verify approval allows drift
+	t.Log("")
+	t.Log("Step 5: COUNTER-EXAMPLE - Verify approval allows drift...")
+	t.Log("Modifying ReplicaSet replicas from 1 to 2...")
+
+	rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+	require.NoError(t, err)
+	rs.Spec.Replicas = ptr(int32(2))
+	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	t.Log("Modified ReplicaSet spec.replicas to 2")
+
+	// Wait for controller to fix it back (should be allowed with approval)
+	ktesting.Eventually(t, func() (bool, string) {
+		rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting replicaset: %v", err)
+		}
+		if *rs.Spec.Replicas != 1 {
+			return false, fmt.Sprintf("replicas still %d, waiting for controller to fix it", *rs.Spec.Replicas)
+		}
+		return true, "controller fixed replicas back to 1 (drift allowed with approval)"
+	}, defaultTimeout, defaultInterval, "approval should allow drift")
+	t.Log("COUNTER-EXAMPLE PASSED: With approval alone, controller fixed the drift")
+
+	// Step 6: Add freeze annotation (keeping approval)
+	t.Log("")
+	t.Log("Step 6: Adding freeze annotation (keeping approval)...")
+	dep, err := clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	dep.Annotations["kausality.io/freeze"] = "true"
+	_, err = clientset.AppsV1().Deployments(enforceNS).Update(ctx, dep, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	t.Log("Added freeze=true annotation (approval still present)")
+
+	// Verify both annotations exist
+	dep, err = clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Contains(t, dep.Annotations, approval.ApprovalsAnnotation, "approval should still be present")
+	assert.Equal(t, "true", dep.Annotations["kausality.io/freeze"], "freeze should be set")
+
+	// Step 7: Modify ReplicaSet again - now freeze should block
+	t.Log("")
+	t.Log("Step 7: Modifying ReplicaSet again - freeze should block...")
+	ktesting.Eventually(t, func() (bool, string) {
+		rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting replicaset: %v", err)
+		}
+		rs.Spec.Replicas = ptr(int32(2))
+		_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error updating replicaset: %v", err)
+		}
+		return true, "successfully modified replicas to 2"
+	}, defaultTimeout, defaultInterval, "should be able to modify replicaset")
+	t.Log("Modified ReplicaSet spec.replicas to 2")
+
+	// Step 8: Verify modification persists (freeze blocks controller)
+	t.Log("")
+	t.Log("Step 8: Verifying freeze blocks controller...")
+	ktesting.Eventually(t, func() (bool, string) {
+		rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting replicaset: %v", err)
+		}
+		if *rs.Spec.Replicas != 2 {
+			return false, fmt.Sprintf("replicas changed to %d (freeze didn't block!)", *rs.Spec.Replicas)
+		}
+		return true, "replicas still 2 (freeze blocked drift)"
+	}, defaultTimeout, defaultInterval, "freeze should block drift")
+
+	// Step 9: Verify freeze error message contains "frozen"
+	t.Log("")
+	t.Log("Step 9: Verifying freeze error message...")
+	rs, err = clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+	require.NoError(t, err)
+	rs.Spec.Replicas = ptr(int32(1))
+	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{
+		FieldManager: "deployment-controller",
+	})
+	require.Error(t, err, "update should be rejected")
+	errMsg := err.Error()
+	t.Logf("Freeze error message: %s", errMsg)
+	assert.True(t, strings.Contains(errMsg, "frozen"),
+		"freeze error should contain 'frozen', got: %s", errMsg)
+
+	t.Log("")
+	t.Log("SUCCESS: Freeze overrides approval")
+	t.Log("- With approval only: drift was ALLOWED (controller fixed replicas)")
+	t.Log("- With approval + freeze: drift was BLOCKED (replicas stayed at 2)")
+	t.Log("- Freeze error message contains 'frozen'")
+}
