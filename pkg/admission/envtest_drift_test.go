@@ -159,12 +159,22 @@ func TestDriftDetection_Drift(t *testing.T) {
 
 	t.Logf("Deployment: gen=%d, obsGen=%d", deploy.Generation, deploy.Status.ObservedGeneration)
 
+	// Find the controller manager from managedFields
+	var controllerManager string
+	for _, mf := range deploy.ManagedFields {
+		if mf.Subresource == "status" {
+			controllerManager = mf.Manager
+			break
+		}
+	}
+	t.Logf("Controller manager from managedFields: %q", controllerManager)
+
 	// Create child ReplicaSet
 	rs := createReplicaSetWithOwner(t, ctx, "drift-rs", deploy)
 
-	// Detect drift
+	// Detect drift with matching fieldManager (simulating controller request)
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.Detect(ctx, rs)
+	result, err := detector.DetectWithFieldManager(ctx, rs, controllerManager)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}
@@ -476,6 +486,16 @@ func TestMultipleOwnerRefs_OnlyControllerMatters(t *testing.T) {
 		t.Fatalf("failed to get controller deploy: %v", err)
 	}
 
+	// Find the controller manager from managedFields
+	var controllerManager string
+	for _, mf := range controllerDeploy.ManagedFields {
+		if mf.Subresource == "status" {
+			controllerManager = mf.Manager
+			break
+		}
+	}
+	t.Logf("Controller manager from managedFields: %q", controllerManager)
+
 	// Create ReplicaSet with BOTH owners, but only one is controller
 	trueVal := true
 	falseVal := false
@@ -524,8 +544,9 @@ func TestMultipleOwnerRefs_OnlyControllerMatters(t *testing.T) {
 	}
 
 	// Detect drift - should use controllerDeploy (the one with controller: true)
+	// Pass the controller manager to simulate a controller request
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.Detect(ctx, rs)
+	result, err := detector.DetectWithFieldManager(ctx, rs, controllerManager)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}

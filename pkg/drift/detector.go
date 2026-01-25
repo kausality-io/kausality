@@ -3,6 +3,7 @@ package drift
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -49,7 +50,14 @@ func (d *Detector) Detect(ctx context.Context, obj client.Object) (*DriftResult,
 
 // DetectWithFieldManager checks whether a mutation would be considered drift.
 // It uses the fieldManager to identify if the request comes from the controller.
+// Deprecated: Use DetectWithContext for proper controller identification with username.
 func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object, fieldManager string) (*DriftResult, error) {
+	return d.DetectWithContext(ctx, obj, fieldManager, "")
+}
+
+// DetectWithContext checks whether a mutation would be considered drift.
+// It uses the fieldManager and username to identify if the request comes from the controller.
+func (d *Detector) DetectWithContext(ctx context.Context, obj client.Object, fieldManager, username string) (*DriftResult, error) {
 	// Resolve parent
 	parentState, err := d.resolver.ResolveParent(ctx, obj)
 	if err != nil {
@@ -93,15 +101,15 @@ func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object
 	}
 
 	// Check if request comes from the controller
-	isController := d.isControllerRequest(parentState, fieldManager)
+	isController := d.isControllerRequest(parentState, fieldManager, username)
 
 	if !isController {
 		// Different actor - not drift, but a new causal origin
 		// (trace propagation will create a new trace for this)
 		result.Allowed = true
 		result.DriftDetected = false
-		result.Reason = fmt.Sprintf("change by different actor %q (controller is %q)",
-			fieldManager, parentState.ControllerManager)
+		result.Reason = fmt.Sprintf("change by different actor (fieldManager=%q, user=%q, controller=%q)",
+			fieldManager, username, parentState.ControllerManager)
 		return result, nil
 	}
 
@@ -125,7 +133,7 @@ func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object
 }
 
 // isControllerRequest checks if the request comes from the controller.
-func (d *Detector) isControllerRequest(parentState *ParentState, fieldManager string) bool {
+func (d *Detector) isControllerRequest(parentState *ParentState, fieldManager, username string) bool {
 	// If we don't know the controller manager, we can't determine who the controller is.
 	// This handles cases where parent doesn't have managedFields (older objects).
 	// In this case, we cannot reliably detect drift - treat as controller to allow changes.
@@ -133,20 +141,40 @@ func (d *Detector) isControllerRequest(parentState *ParentState, fieldManager st
 		return true
 	}
 
-	// If the request has a fieldManager that matches the controller, it's definitely the controller.
+	// Direct match: fieldManager matches the controller's manager name
 	if fieldManager == parentState.ControllerManager {
 		return true
 	}
 
-	// If the request has a non-empty fieldManager that doesn't match, it's a different actor.
-	// This allows us to distinguish intentional changes by users, HPA, etc.
-	if fieldManager != "" {
-		return false
+	// Username-based detection: Some controllers don't set fieldManager in requests,
+	// but the API server records their changes with a default manager name.
+	// Use the username (ServiceAccount) to identify known controller patterns.
+	return d.isKnownControllerUsername(parentState.ControllerManager, username)
+}
+
+// isKnownControllerUsername checks if username matches known controller patterns
+// for a given controller manager name.
+func (d *Detector) isKnownControllerUsername(controllerManager, username string) bool {
+	// kube-controller-manager controllers:
+	// - Run as serviceaccounts in kube-system (e.g., system:serviceaccount:kube-system:deployment-controller)
+	// - ManagedFields records them as "kube-controller-manager"
+	if controllerManager == "kube-controller-manager" {
+		if strings.HasPrefix(username, "system:serviceaccount:kube-system:") &&
+			strings.HasSuffix(username, "-controller") {
+			return true
+		}
 	}
 
-	// Empty fieldManager is ambiguous - controllers often don't set it.
-	// Treat as potentially controller and check for drift.
-	return true
+	// Crossplane controllers:
+	// - Run as serviceaccounts in crossplane-system
+	// - ManagedFields may record them with various prefixes
+	if strings.Contains(controllerManager, "crossplane") {
+		if strings.HasPrefix(username, "system:serviceaccount:crossplane-system:") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // DetectFromState checks for drift given an already-resolved parent state.
@@ -157,7 +185,13 @@ func (d *Detector) DetectFromState(parentState *ParentState) *DriftResult {
 }
 
 // DetectFromStateWithFieldManager checks for drift given parent state and fieldManager.
+// Deprecated: Use DetectFromStateWithContext for proper controller identification with username.
 func (d *Detector) DetectFromStateWithFieldManager(parentState *ParentState, fieldManager string) *DriftResult {
+	return d.DetectFromStateWithContext(parentState, fieldManager, "")
+}
+
+// DetectFromStateWithContext checks for drift given parent state, fieldManager, and username.
+func (d *Detector) DetectFromStateWithContext(parentState *ParentState, fieldManager, username string) *DriftResult {
 	// No parent state - allow
 	if parentState == nil {
 		return &DriftResult{
@@ -192,14 +226,14 @@ func (d *Detector) DetectFromStateWithFieldManager(parentState *ParentState, fie
 	}
 
 	// Check if request comes from the controller
-	isController := d.isControllerRequest(parentState, fieldManager)
+	isController := d.isControllerRequest(parentState, fieldManager, username)
 
 	if !isController {
 		// Different actor - not drift, but a new causal origin
 		result.Allowed = true
 		result.DriftDetected = false
-		result.Reason = fmt.Sprintf("change by different actor %q (controller is %q)",
-			fieldManager, parentState.ControllerManager)
+		result.Reason = fmt.Sprintf("change by different actor (fieldManager=%q, user=%q, controller=%q)",
+			fieldManager, username, parentState.ControllerManager)
 		return result
 	}
 
