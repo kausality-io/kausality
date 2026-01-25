@@ -93,9 +93,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// makeNopResource creates an unstructured NopResource with the given name and optional labels.
+// makeNopResource creates an unstructured NopResource with the given name and optional annotations.
 // NopResource is cluster-scoped in Crossplane, so no namespace is set.
-func makeNopResource(name string, labels map[string]string) *unstructured.Unstructured {
+// Note: kausality.io/trace-* metadata must be annotations, not labels.
+func makeNopResource(name string, annotations map[string]string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "nop.crossplane.io/v1alpha1",
@@ -116,8 +117,8 @@ func makeNopResource(name string, labels map[string]string) *unstructured.Unstru
 			},
 		},
 	}
-	if labels != nil {
-		obj.SetLabels(labels)
+	if annotations != nil {
+		obj.SetAnnotations(annotations)
 	}
 	return obj
 }

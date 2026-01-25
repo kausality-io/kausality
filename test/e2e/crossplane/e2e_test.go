@@ -101,18 +101,18 @@ func TestKausalityPodsReady(t *testing.T) {
 	t.Log("All kausality webhook pods are running and ready")
 }
 
-// TestNopResourceWithTraceLabels verifies that trace labels on NopResource are processed.
-func TestNopResourceWithTraceLabels(t *testing.T) {
+// TestNopResourceWithTraceAnnotations verifies that trace annotations on NopResource are processed.
+func TestNopResourceWithTraceAnnotations(t *testing.T) {
 	ctx := context.Background()
 	name := fmt.Sprintf("trace-nop-%s", rand.String(4))
 
-	t.Log("=== Testing NopResource with Trace Labels ===")
-	t.Log("When a NopResource has kausality.io/trace-* labels, the webhook should")
-	t.Log("intercept the creation and process the trace labels.")
+	t.Log("=== Testing NopResource with Trace Annotations ===")
+	t.Log("When a NopResource has kausality.io/trace-* annotations, the webhook should")
+	t.Log("intercept the creation and process the trace metadata.")
 
-	// Step 1: Create NopResource with trace labels
+	// Step 1: Create NopResource with trace annotations
 	t.Log("")
-	t.Logf("Step 1: Creating NopResource %q with trace labels...", name)
+	t.Logf("Step 1: Creating NopResource %q with trace annotations...", name)
 
 	nopResource := makeNopResource(name, map[string]string{
 		"kausality.io/trace-ticket":    "CROSSPLANE-001",
@@ -125,7 +125,7 @@ func TestNopResourceWithTraceLabels(t *testing.T) {
 		t.Logf("Cleanup: Deleting NopResource %s", name)
 		_ = dynamicClient.Resource(nopResourceGVR).Delete(ctx, name, metav1.DeleteOptions{})
 	})
-	t.Logf("NopResource %q created with trace labels", name)
+	t.Logf("NopResource %q created with trace annotations", name)
 
 	// Step 2: Wait for NopResource to become Ready
 	t.Log("")
@@ -163,7 +163,7 @@ func TestNopResourceWithTraceLabels(t *testing.T) {
 	// Step 3: Check for trace annotation
 	t.Log("")
 	t.Log("Step 3: Checking NopResource for trace annotation...")
-	t.Log("Note: Direct user creation may not have trace annotation (no parent)")
+	t.Log("Note: Direct user creation should have trace annotation (origin hop)")
 
 	obj, err := dynamicClient.Resource(nopResourceGVR).Get(ctx, name, metav1.GetOptions{})
 	require.NoError(t, err)
@@ -172,18 +172,20 @@ func TestNopResourceWithTraceLabels(t *testing.T) {
 	if found && traceAnnotation != "" {
 		t.Logf("Found trace annotation: %s", traceAnnotation)
 
-		var trace map[string]interface{}
-		if err := json.Unmarshal([]byte(traceAnnotation), &trace); err == nil {
-			if labels, ok := trace["labels"].(map[string]interface{}); ok {
-				assert.Contains(t, labels, "kausality.io/trace-ticket")
+		// Trace is a JSON array of hops
+		var trace []map[string]interface{}
+		if err := json.Unmarshal([]byte(traceAnnotation), &trace); err == nil && len(trace) > 0 {
+			// Check if the first hop has labels from our annotations
+			if labels, ok := trace[0]["labels"].(map[string]interface{}); ok {
+				assert.Contains(t, labels, "ticket", "trace hop should contain 'ticket' label from annotation")
 			}
 		}
 	} else {
-		t.Log("No trace annotation (expected for direct user creation without parent)")
+		t.Log("No trace annotation found - webhook may not have intercepted CREATE")
 	}
 
 	t.Log("")
-	t.Log("SUCCESS: NopResource with trace labels created and processed")
+	t.Log("SUCCESS: NopResource with trace annotations created and processed")
 }
 
 // TestWebhookConfigurationForCrossplane verifies that the webhook is configured for Crossplane resources.
@@ -242,7 +244,7 @@ func TestMultipleNopResources(t *testing.T) {
 		names[i] = name
 
 		nopResource := makeNopResource(name, map[string]string{
-			"kausality.io/trace-batch": fmt.Sprintf("batch-%d", i+1),
+			"kausality.io/trace-batch": fmt.Sprintf("batch-%d", i+1), // trace metadata as annotation
 		})
 
 		_, err := dynamicClient.Resource(nopResourceGVR).Create(ctx, nopResource, metav1.CreateOptions{})
