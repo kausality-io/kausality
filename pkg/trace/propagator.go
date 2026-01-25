@@ -81,6 +81,19 @@ func (p *Propagator) PropagateWithFieldManager(ctx context.Context, obj client.O
 		if err != nil {
 			return nil, fmt.Errorf("failed to get parent trace: %w", err)
 		}
+
+		// If parent has no trace, synthesize one from parentState
+		if len(parentTrace) == 0 && parentState != nil {
+			parentHop := NewHop(
+				parentState.Ref.APIVersion,
+				parentState.Ref.Kind,
+				parentState.Ref.Name,
+				parentState.Generation,
+				"", // user unknown
+				"", // requestUID unknown
+			)
+			parentTrace = Trace{parentHop}
+		}
 		result.ParentTrace = parentTrace
 
 		// Extend trace with new hop (each hop has its own labels, no inheritance)
