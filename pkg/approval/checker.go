@@ -120,41 +120,16 @@ func (c *Checker) checkApprovals(annotations map[string]string, child ChildRef, 
 // CheckFromAnnotations is a convenience function that checks approvals
 // directly from annotation strings.
 func CheckFromAnnotations(approvalsStr, rejectionsStr string, child ChildRef, parentGeneration int64) CheckResult {
-	// Check rejections first
-	if rejectionsStr != "" {
-		rejections, err := ParseRejections(rejectionsStr)
-		if err == nil {
-			for i := range rejections {
-				r := &rejections[i]
-				if r.Matches(child) && r.IsActive(parentGeneration) {
-					return CheckResult{
-						Rejected:         true,
-						Reason:           r.Reason,
-						MatchedRejection: r,
-					}
-				}
-			}
-		}
+	c := &Checker{}
+	annotations := map[string]string{
+		ApprovalsAnnotation:  approvalsStr,
+		RejectionsAnnotation: rejectionsStr,
 	}
 
-	// Check approvals
-	if approvalsStr != "" {
-		approvals, err := ParseApprovals(approvalsStr)
-		if err == nil {
-			for i := range approvals {
-				a := &approvals[i]
-				if a.Matches(child) && a.IsValid(parentGeneration) {
-					return CheckResult{
-						Approved:        true,
-						Reason:          "approved via " + a.Mode + " approval",
-						MatchedApproval: a,
-					}
-				}
-			}
-		}
+	// Check rejections first (rejection wins)
+	if result := c.checkRejections(annotations, child, parentGeneration); result.Rejected {
+		return result
 	}
 
-	return CheckResult{
-		Reason: "no approval found for child",
-	}
+	return c.checkApprovals(annotations, child, parentGeneration)
 }
