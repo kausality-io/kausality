@@ -2,6 +2,7 @@ package approval
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -337,11 +338,11 @@ func TestParseRejections(t *testing.T) {
 
 func TestParseFreeze(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantNil   bool
-		wantUser  string
-		wantErr   bool
+		name     string
+		input    string
+		wantNil  bool
+		wantUser string
+		wantErr  bool
 	}{
 		{
 			name:    "empty string",

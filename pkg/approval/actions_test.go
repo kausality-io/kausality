@@ -275,6 +275,69 @@ func TestActionApplier_ClearSnooze(t *testing.T) {
 	assert.Empty(t, annotations[SnoozeAnnotation])
 }
 
+func TestActionApplier_ApplyFreeze(t *testing.T) {
+	parent := createTestParent(1, nil)
+	fakeClient := fake.NewClientBuilder().WithObjects(parent).Build()
+
+	applier := NewActionApplier(fakeClient)
+	parentRef := ObjectRef{
+		APIVersion: "example.com/v1alpha1",
+		Kind:       "TestParent",
+		Namespace:  "default",
+		Name:       "test-parent",
+	}
+
+	err := applier.ApplyFreeze(context.Background(), parentRef, "admin@example.com", "investigating incident")
+	require.NoError(t, err)
+
+	// Verify the freeze was set
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(parent.GroupVersionKind())
+	err = fakeClient.Get(context.Background(), client.ObjectKeyFromObject(parent), updated)
+	require.NoError(t, err)
+
+	annotations := updated.GetAnnotations()
+	require.NotNil(t, annotations)
+	freezeStr := annotations[FreezeAnnotation]
+	require.NotEmpty(t, freezeStr)
+
+	// Parse the structured freeze
+	freeze, err := ParseFreeze(freezeStr)
+	require.NoError(t, err)
+	require.NotNil(t, freeze)
+
+	assert.Equal(t, "admin@example.com", freeze.User)
+	assert.Equal(t, "investigating incident", freeze.Message)
+	assert.False(t, freeze.At.IsZero())
+}
+
+func TestActionApplier_ClearFreeze(t *testing.T) {
+	parent := createTestParent(1, map[string]string{
+		FreezeAnnotation: `{"user":"admin","message":"test"}`,
+	})
+	fakeClient := fake.NewClientBuilder().WithObjects(parent).Build()
+
+	applier := NewActionApplier(fakeClient)
+	parentRef := ObjectRef{
+		APIVersion: "example.com/v1alpha1",
+		Kind:       "TestParent",
+		Namespace:  "default",
+		Name:       "test-parent",
+	}
+
+	err := applier.ClearFreeze(context.Background(), parentRef)
+	require.NoError(t, err)
+
+	// Verify the freeze was cleared
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(parent.GroupVersionKind())
+	err = fakeClient.Get(context.Background(), client.ObjectKeyFromObject(parent), updated)
+	require.NoError(t, err)
+
+	annotations := updated.GetAnnotations()
+	assert.Empty(t, annotations[FreezeAnnotation])
+}
+
 func TestActionApplier_FetchObjectNotFound(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().Build()
 
