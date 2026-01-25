@@ -335,6 +335,142 @@ func TestParseRejections(t *testing.T) {
 	}
 }
 
+func TestParseFreeze(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantNil   bool
+		wantUser  string
+		wantErr   bool
+	}{
+		{
+			name:    "empty string",
+			input:   "",
+			wantNil: true,
+		},
+		{
+			name:     "legacy true format",
+			input:    "true",
+			wantNil:  false,
+			wantUser: "", // no user in legacy format
+		},
+		{
+			name:     "structured JSON",
+			input:    `{"user":"admin@example.com","message":"incident #123","at":"2026-01-25T10:00:00Z"}`,
+			wantNil:  false,
+			wantUser: "admin@example.com",
+		},
+		{
+			name:    "invalid JSON",
+			input:   `{broken`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseFreeze(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			if tt.wantNil {
+				assert.Nil(t, got)
+				return
+			}
+			assert.NotNil(t, got)
+			assert.Equal(t, tt.wantUser, got.User)
+		})
+	}
+}
+
+func TestParseSnooze(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantNil    bool
+		wantUser   string
+		wantExpiry bool
+		wantErr    bool
+	}{
+		{
+			name:    "empty string",
+			input:   "",
+			wantNil: true,
+		},
+		{
+			name:       "legacy RFC3339 format",
+			input:      "2026-01-25T12:00:00Z",
+			wantNil:    false,
+			wantUser:   "", // no user in legacy format
+			wantExpiry: true,
+		},
+		{
+			name:       "structured JSON",
+			input:      `{"expiry":"2026-01-25T12:00:00Z","user":"ops@example.com","message":"deploying hotfix"}`,
+			wantNil:    false,
+			wantUser:   "ops@example.com",
+			wantExpiry: true,
+		},
+		{
+			name:    "invalid JSON",
+			input:   `{broken`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseSnooze(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			if tt.wantNil {
+				assert.Nil(t, got)
+				return
+			}
+			assert.NotNil(t, got)
+			assert.Equal(t, tt.wantUser, got.User)
+			if tt.wantExpiry {
+				assert.False(t, got.Expiry.IsZero())
+			}
+		})
+	}
+}
+
+func TestSnooze_IsActive(t *testing.T) {
+	tests := []struct {
+		name   string
+		snooze *Snooze
+		want   bool
+	}{
+		{
+			name:   "nil snooze",
+			snooze: nil,
+			want:   false,
+		},
+		{
+			name:   "expired snooze",
+			snooze: &Snooze{Expiry: time.Now().Add(-1 * time.Hour)},
+			want:   false,
+		},
+		{
+			name:   "active snooze",
+			snooze: &Snooze{Expiry: time.Now().Add(1 * time.Hour)},
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.snooze.IsActive())
+		})
+	}
+}
+
 func TestMarshalApprovals(t *testing.T) {
 	tests := []struct {
 		name      string
