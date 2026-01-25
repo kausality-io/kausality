@@ -32,6 +32,9 @@ import (
 // TestDriftBlockedInEnforceMode verifies that drift is blocked in enforce mode
 // when there is no approval annotation.
 func TestDriftBlockedInEnforceMode(t *testing.T) {
+	if clientset == nil {
+		t.Fatal("clientset is nil - TestMain did not initialize properly")
+	}
 	ctx := context.Background()
 
 	t.Log("=== Testing Drift Blocked in Enforce Mode ===")
@@ -121,8 +124,11 @@ func TestDriftBlockedInEnforceMode(t *testing.T) {
 
 	// Step 5: Directly modify the ReplicaSet's spec.replicas (simulate external drift)
 	// Change from 1 to 2 - the Deployment controller will want to set it back to 1
+	// Use a specific fieldManager so kausality knows this isn't the controller
 	rs.Spec.Replicas = ptr(int32(2))
-	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
+	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{
+		FieldManager: "e2e-test",
+	})
 	require.NoError(t, err)
 	t.Log("Directly modified ReplicaSet spec.replicas from 1 to 2")
 
@@ -387,12 +393,19 @@ func TestRejectionBlocksDrift(t *testing.T) {
 	t.Logf("Added rejection annotation to Deployment for ReplicaSet %s", rsName)
 
 	// Step 6: Directly modify the ReplicaSet's spec.replicas
-	rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
-	require.NoError(t, err)
-
-	rs.Spec.Replicas = ptr(int32(2))
-	_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
-	require.NoError(t, err)
+	// Use retry loop to handle conflicts with controller
+	ktesting.Eventually(t, func() (bool, string) {
+		rs, err := clientset.AppsV1().ReplicaSets(enforceNS).Get(ctx, rsName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting replicaset: %v", err)
+		}
+		rs.Spec.Replicas = ptr(int32(2))
+		_, err = clientset.AppsV1().ReplicaSets(enforceNS).Update(ctx, rs, metav1.UpdateOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error updating replicaset: %v", err)
+		}
+		return true, "successfully modified replicas to 2"
+	}, defaultTimeout, defaultInterval, "should be able to modify replicaset")
 	t.Log("Directly modified ReplicaSet spec.replicas from 1 to 2")
 
 	// Step 7: Verify our modification persists (controller can't fix it due to rejection)

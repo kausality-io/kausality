@@ -125,20 +125,16 @@ func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object
 
 // isControllerRequest checks if the request comes from the controller.
 func (d *Detector) isControllerRequest(parentState *ParentState, fieldManager string) bool {
-	// If we don't know the controller manager, fall back to assuming controller
-	// This handles cases where parent doesn't have managedFields (older objects)
-	// or we can't determine the controller
+	// If we don't know the controller manager, we can't determine who the controller is.
+	// This handles cases where parent doesn't have managedFields (older objects).
+	// In this case, we cannot reliably detect drift - treat as controller to allow changes.
 	if parentState.ControllerManager == "" {
 		return true
 	}
 
-	// If fieldManager is empty, we can't determine the requester
-	// Fall back to assuming controller for backwards compatibility
-	if fieldManager == "" {
-		return true
-	}
-
-	// Compare field managers
+	// We know the controller's fieldManager.
+	// Only an exact match means the request is from the controller.
+	// Empty or different fieldManager = different actor (not drift).
 	return fieldManager == parentState.ControllerManager
 }
 

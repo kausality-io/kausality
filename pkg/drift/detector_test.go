@@ -187,7 +187,7 @@ func TestDetectFromStateWithFieldManager(t *testing.T) {
 			expectReasonMatch: "expected change",
 		},
 		{
-			name: "empty fieldManager - fallback assumes controller",
+			name: "empty fieldManager with known controller - different actor",
 			state: &ParentState{
 				Ref:                   ParentRef{Kind: "Deployment", Name: "test"},
 				Generation:            5,
@@ -197,7 +197,7 @@ func TestDetectFromStateWithFieldManager(t *testing.T) {
 			},
 			fieldManager:      "",
 			expectDrift:       false,
-			expectReasonMatch: "expected change",
+			expectReasonMatch: "different actor",
 		},
 	}
 
