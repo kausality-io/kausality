@@ -5,13 +5,14 @@ The core logic is implemented as a **Go library** that can be consumed in two wa
 ## Library Import (Generic Control Plane)
 
 ```go
-import "github.com/sttts/kausality/pkg/admission"
+import "github.com/kausality-io/kausality/pkg/admission"
 
 // In apiserver setup
 admissionHandler := admission.NewHandler(admission.Config{
-    Client:        client,
-    PolicyLister:  policyInformer.Lister(),
-    // ...
+    Client:         client,
+    Log:            logger,
+    DriftConfig:    driftConfig,    // optional, defaults to log mode
+    CallbackSender: callbackSender, // optional, for drift notifications
 })
 
 // Register as admission plugin
@@ -20,22 +21,23 @@ server.RegisterAdmission(admissionHandler)
 
 - Embedded directly in custom apiserver (k8s.io/apiserver)
 - No network latency, no webhook overhead
-- ApprovalPolicy CRD served by same apiserver
 - Resource targeting is handled by which admission plugins are registered for which resources
 
 ## Webhook Server (Stock Kubernetes)
 
 ```go
-import "github.com/sttts/kausality/pkg/webhook"
+import "github.com/kausality-io/kausality/pkg/webhook"
 
 // Standalone webhook server
 server := webhook.NewServer(webhook.Config{
-    Client:       client,
-    PolicyLister: policyInformer.Lister(),
-    CertDir:      "/etc/webhook/certs",
-    // ...
+    Client:         client,
+    Log:            logger,
+    CertDir:        "/etc/webhook/certs",
+    DriftConfig:    driftConfig,    // optional
+    CallbackSender: callbackSender, // optional
 })
-server.Run()
+server.Register()
+server.Start(ctx)
 ```
 
 - Deployed as separate service
@@ -117,8 +119,9 @@ For generic control plane, resource targeting is typically hard-coded or loaded 
 // The library doesn't filter — it processes whatever requests it receives
 // Resource targeting is done at the apiserver level (which resources invoke admission)
 admission.NewHandler(admission.Config{
-    Client:       client,
-    PolicyLister: policyInformer.Lister(),
+    Client:      client,
+    Log:         logger,
+    DriftConfig: driftConfig,
 })
 ```
 
