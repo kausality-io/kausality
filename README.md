@@ -5,6 +5,20 @@
 <h1 align="center">Kausality</h1>
 
 <p align="center">
+  <strong style="color: red;">&#9888; EXPERIMENTAL &#9888;</strong>
+</p>
+
+<table align="center">
+<tr>
+<td>
+<strong>This project is highly experimental and under active development.</strong><br>
+APIs, behavior, and configuration may change without notice.<br>
+<strong>Not recommended for production use.</strong>
+</td>
+</tr>
+</table>
+
+<p align="center">
   <em>"Every mutation needs a cause."</em>
 </p>
 
