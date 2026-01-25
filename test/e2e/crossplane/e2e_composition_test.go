@@ -86,9 +86,53 @@ func TestTwoLevelCompositionDrift(t *testing.T) {
 	require.NoError(t, err, "failed to create XPlatform XRD")
 	t.Log("Created XPlatform XRD")
 
-	// Wait for XRDs to be established
+	// Wait for XRDs to be established (CRDs created)
 	t.Log("Waiting for XRDs to be established...")
-	time.Sleep(5 * time.Second)
+	ktesting.Eventually(t, func() (bool, string) {
+		xrd, err := dynamicClient.Resource(xrdGVR).Get(ctx, "xservices.test.kausality.io", metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting XService XRD: %v", err)
+		}
+		conditions, found, _ := unstructured.NestedSlice(xrd.Object, "status", "conditions")
+		if !found {
+			return false, "no conditions on XService XRD"
+		}
+		for _, c := range conditions {
+			cond, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			cType, _, _ := unstructured.NestedString(cond, "type")
+			cStatus, _, _ := unstructured.NestedString(cond, "status")
+			if cType == "Established" && cStatus == "True" {
+				return true, "XService XRD established"
+			}
+		}
+		return false, "XService XRD not established yet"
+	}, 60*time.Second, 2*time.Second, "XService XRD should be established")
+
+	ktesting.Eventually(t, func() (bool, string) {
+		xrd, err := dynamicClient.Resource(xrdGVR).Get(ctx, "xplatforms.test.kausality.io", metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting XPlatform XRD: %v", err)
+		}
+		conditions, found, _ := unstructured.NestedSlice(xrd.Object, "status", "conditions")
+		if !found {
+			return false, "no conditions on XPlatform XRD"
+		}
+		for _, c := range conditions {
+			cond, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			cType, _, _ := unstructured.NestedString(cond, "type")
+			cStatus, _, _ := unstructured.NestedString(cond, "status")
+			if cType == "Established" && cStatus == "True" {
+				return true, "XPlatform XRD established"
+			}
+		}
+		return false, "XPlatform XRD not established yet"
+	}, 60*time.Second, 2*time.Second, "XPlatform XRD should be established")
 
 	// Step 2: Create Compositions
 	t.Log("")
@@ -158,11 +202,12 @@ func TestTwoLevelCompositionDrift(t *testing.T) {
 			}
 		}
 		return false, fmt.Sprintf("no XService with XPlatform owner (found %d XServices)", len(list.Items))
-	}, 60*time.Second, 2*time.Second, "XService should be created by XPlatform composition")
+	}, 90*time.Second, 2*time.Second, "XService should be created by XPlatform composition")
 
 	t.Logf("Found XService: %s", xserviceName)
 
 	// Wait for NopResource (cluster-scoped)
+	// This can take a while as it requires the XService composition to process
 	var nopResourceName string
 	ktesting.Eventually(t, func() (bool, string) {
 		list, err := dynamicClient.Resource(nopResourceGVR).List(ctx, metav1.ListOptions{})
@@ -179,7 +224,7 @@ func TestTwoLevelCompositionDrift(t *testing.T) {
 			}
 		}
 		return false, fmt.Sprintf("no NopResource with XService owner (found %d NopResources)", len(list.Items))
-	}, 60*time.Second, 2*time.Second, "NopResource should be created by XService composition")
+	}, 120*time.Second, 2*time.Second, "NopResource should be created by XService composition")
 
 	t.Logf("Found NopResource: %s", nopResourceName)
 

@@ -225,8 +225,13 @@ func TestIntentionalChangeAllowedInEnforceMode(t *testing.T) {
 		if dep.Status.ObservedGeneration != dep.Generation {
 			return false, fmt.Sprintf("rollout in progress: gen=%d, obsGen=%d", dep.Generation, dep.Status.ObservedGeneration)
 		}
-		if dep.Status.AvailableReplicas != *dep.Spec.Replicas {
-			return false, fmt.Sprintf("not fully available: available=%d, desired=%d", dep.Status.AvailableReplicas, *dep.Spec.Replicas)
+		// During rolling update, AvailableReplicas can briefly exceed Replicas (old + new pods)
+		// Check that we have at least the desired number and UpdatedReplicas matches
+		if dep.Status.UpdatedReplicas != *dep.Spec.Replicas {
+			return false, fmt.Sprintf("updated replicas mismatch: updated=%d, desired=%d", dep.Status.UpdatedReplicas, *dep.Spec.Replicas)
+		}
+		if dep.Status.ReadyReplicas < *dep.Spec.Replicas {
+			return false, fmt.Sprintf("not ready: ready=%d, desired=%d", dep.Status.ReadyReplicas, *dep.Spec.Replicas)
 		}
 		return true, "rollout complete"
 	}, defaultTimeout, defaultInterval, "intentional change should complete")

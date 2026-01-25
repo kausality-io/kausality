@@ -112,22 +112,36 @@ func TestTracePropagation(t *testing.T) {
 			return false, fmt.Sprintf("no trace annotation yet on replicaset %s", rs.Name)
 		}
 
-		// Parse and verify the trace content
-		var trace map[string]interface{}
-		if err := json.Unmarshal([]byte(traceAnnotation), &trace); err != nil {
+		// Parse the trace as an array of hops
+		var hops []map[string]interface{}
+		if err := json.Unmarshal([]byte(traceAnnotation), &hops); err != nil {
 			return false, fmt.Sprintf("failed to parse trace annotation: %v", err)
 		}
 
-		labels, ok := trace["labels"].(map[string]interface{})
-		if !ok {
-			return false, "no labels in trace"
+		if len(hops) == 0 {
+			return false, "trace has no hops"
 		}
 
-		if _, hasTicket := labels["kausality.io/trace-ticket"]; !hasTicket {
-			return false, "trace missing trace-ticket label"
+		// Check that trace labels propagated (in origin hop or any hop)
+		foundTicket := false
+		foundPR := false
+		for _, hop := range hops {
+			labels, ok := hop["labels"].(map[string]interface{})
+			if ok {
+				if _, hasTicket := labels["ticket"]; hasTicket {
+					foundTicket = true
+				}
+				if _, hasPR := labels["pr"]; hasPR {
+					foundPR = true
+				}
+			}
 		}
-		if _, hasPR := labels["kausality.io/trace-pr"]; !hasPR {
-			return false, "trace missing trace-pr label"
+
+		if !foundTicket {
+			return false, "trace missing ticket label"
+		}
+		if !foundPR {
+			return false, "trace missing pr label"
 		}
 
 		return true, fmt.Sprintf("replicaset %s has trace annotation with expected labels", rs.Name)
@@ -157,16 +171,15 @@ func TestTracePropagation(t *testing.T) {
 				return false, fmt.Sprintf("no trace annotation yet on pod %s (phase=%s)", pod.Name, pod.Status.Phase)
 			}
 
-			// Parse and verify the trace content
-			var trace map[string]interface{}
-			if err := json.Unmarshal([]byte(traceAnnotation), &trace); err != nil {
+			// Parse the trace as an array of hops
+			var hops []map[string]interface{}
+			if err := json.Unmarshal([]byte(traceAnnotation), &hops); err != nil {
 				return false, fmt.Sprintf("failed to parse trace annotation on pod %s: %v", pod.Name, err)
 			}
 
-			// The pod trace should have hops showing the chain
-			hops, ok := trace["hops"].([]interface{})
-			if !ok || len(hops) == 0 {
-				return false, fmt.Sprintf("pod %s trace has no hops", pod.Name)
+			// The pod trace should have hops showing the chain (Deployment -> ReplicaSet -> Pod)
+			if len(hops) < 2 {
+				return false, fmt.Sprintf("pod %s trace has only %d hops (expected >=2)", pod.Name, len(hops))
 			}
 		}
 		return true, fmt.Sprintf("all %d pods have trace annotations with hops", len(pods.Items))
