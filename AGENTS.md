@@ -61,7 +61,7 @@ else → not controller → not drift (new causal origin)
 
 **Webhook configuration:** Must intercept status subresource updates to record controllers.
 
-For detailed design documentation, see [doc/DESIGN.md](doc/DESIGN.md).
+For detailed design documentation, see [doc/design/INDEX.md](doc/design/INDEX.md).
 
 ### Package Structure
 

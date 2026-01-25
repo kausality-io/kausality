@@ -20,13 +20,13 @@ Kausality detects when controllers make unexpected changes to child resources an
 
 | Document | Topics |
 |----------|--------|
-| [DESIGN_DRIFT_DETECTION.md](DESIGN_DRIFT_DETECTION.md) | Drift detection mechanism, controller identification, annotation protection, lifecycle phases |
-| [DESIGN_APPROVALS.md](DESIGN_APPROVALS.md) | Approval/rejection annotations, modes, enforcement, freeze/snooze, ApprovalPolicy CRD |
-| [DESIGN_TRACING.md](DESIGN_TRACING.md) | Request tracing, origin vs controller hop, trace labels |
-| [DESIGN_CALLBACKS.md](DESIGN_CALLBACKS.md) | Drift notification webhooks, DriftReport API, Slack escalation |
-| [DESIGN_DEPLOYMENT.md](DESIGN_DEPLOYMENT.md) | Library vs webhook deployment, resource targeting, Helm configuration |
-| [ADR.md](ADR.md) | Architecture decisions, rationale, trade-offs, alternatives |
-| [ROADMAP.md](ROADMAP.md) | Implementation phases and status |
+| [DRIFT_DETECTION.md](DRIFT_DETECTION.md) | Drift detection mechanism, controller identification, annotation protection, lifecycle phases |
+| [APPROVALS.md](APPROVALS.md) | Approval/rejection annotations, modes, enforcement, freeze/snooze, ApprovalPolicy CRD |
+| [TRACING.md](TRACING.md) | Request tracing, origin vs controller hop, trace labels |
+| [CALLBACKS.md](CALLBACKS.md) | Drift notification webhooks, DriftReport API, Slack escalation |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Library vs webhook deployment, resource targeting, Helm configuration |
+| [ADR.md](../ADR.md) | Architecture decisions, rationale, trade-offs, alternatives |
+| [ROADMAP.md](../ROADMAP.md) | Implementation phases and status |
 
 ## Quick Reference
 

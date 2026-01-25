@@ -312,12 +312,12 @@ kausality/
 ├── charts/
 │   └── kausality/               # Helm chart
 └── doc/
-    └── DESIGN.md                # Design specification
+    └── design/                  # Design specification
 ```
 
 ## Documentation
 
-- [Design Document](doc/DESIGN.md) — Full design specification for admission-only drift detection
+- [Design Document](doc/design/INDEX.md) — Full design specification for admission-only drift detection
 
 ## Roadmap
 
