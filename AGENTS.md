@@ -357,24 +357,20 @@ Never commit test changes without running them first.
 
 ### E2E Development Workflow
 
-During development, run E2E tests against a **local kind cluster**:
-
-1. **Use existing kind cluster** - Don't create new clusters for each test run
-2. **Ensure dependencies are installed** - Crossplane, provider-nop, function-patch-and-transform
-3. **Run tests directly** - `go test ./test/e2e/crossplane -tags=e2e -v`
-4. **Use tilt for auto-deploy** - `tilt up` for automatic rebuild and deploy on code changes
-
-The `run.sh` scripts are for **CI only** - they create fresh clusters and do full setup.
+**Never create kind clusters for E2E tests.** Use your existing local cluster. CI scripts handle cluster creation.
 
 ```bash
-# Local development workflow
-kind create cluster --name dev  # One-time setup
-tilt up                         # Auto-compile and deploy on changes
-go test ./test/e2e/crossplane -tags=e2e -v  # Run tests
+# Run tests against current cluster
+make e2e                       # Kubernetes E2E tests
+make e2e-crossplane            # Crossplane E2E tests (auto-installs Crossplane)
 
-# CI workflow (run.sh handles everything)
-./test/e2e/crossplane/run.sh
+# Or install dependencies separately
+make install-crossplane        # Install Crossplane, provider-nop, function
+make install                   # Install kausality
+tilt up                        # Auto-compile and deploy on code changes
 ```
+
+The `run.sh` scripts are for **CI only** - they create fresh kind clusters.
 
 ## Code Style
 

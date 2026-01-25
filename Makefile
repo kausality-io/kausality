@@ -101,12 +101,31 @@ ko-build-kind: ko ## Build and load images into kind cluster.
 ##@ E2E Testing
 
 .PHONY: e2e
-e2e: ## Run e2e tests with kind.
-	./test/e2e/run.sh
+e2e: ## Run Kubernetes e2e tests against current cluster.
+	go test ./test/e2e/kubernetes -tags=e2e -v -timeout 10m
 
 .PHONY: e2e-crossplane
-e2e-crossplane: ## Run e2e tests with Crossplane.
-	./test/e2e/crossplane/run.sh
+e2e-crossplane: install-crossplane ## Run Crossplane e2e tests against current cluster.
+	go test ./test/e2e/crossplane -tags=e2e -v -timeout 10m
+
+.PHONY: install-crossplane
+install-crossplane: helm ## Install Crossplane, provider-nop, and function on current cluster.
+	@echo "Installing Crossplane..."
+	$(HELM) repo add crossplane-stable https://charts.crossplane.io/stable 2>/dev/null || true
+	$(HELM) repo update
+	$(HELM) upgrade --install crossplane crossplane-stable/crossplane \
+		--namespace crossplane-system --create-namespace --wait --timeout 300s
+	@echo "Waiting for Crossplane..."
+	kubectl wait --for=condition=ready pod -l app=crossplane -n crossplane-system --timeout=120s
+	@echo "Installing provider-nop..."
+	kubectl apply -f - <<< '{"apiVersion":"pkg.crossplane.io/v1","kind":"Provider","metadata":{"name":"provider-nop"},"spec":{"package":"xpkg.upbound.io/crossplane-contrib/provider-nop:v0.3.0"}}'
+	@echo "Installing function-patch-and-transform..."
+	kubectl apply -f - <<< '{"apiVersion":"pkg.crossplane.io/v1beta1","kind":"Function","metadata":{"name":"function-patch-and-transform"},"spec":{"package":"xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.7.0"}}'
+	@echo "Waiting for provider-nop to be healthy..."
+	@until kubectl get provider provider-nop -o jsonpath='{.status.conditions[?(@.type=="Healthy")].status}' 2>/dev/null | grep -q True; do sleep 2; done
+	@echo "Waiting for function to be healthy..."
+	@until kubectl get function function-patch-and-transform -o jsonpath='{.status.conditions[?(@.type=="Healthy")].status}' 2>/dev/null | grep -q True; do sleep 2; done
+	@echo "Crossplane installed."
 
 ##@ Deployment
 
