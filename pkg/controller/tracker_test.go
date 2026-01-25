@@ -9,6 +9,47 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+func TestUserIdentifier(t *testing.T) {
+	tests := []struct {
+		name     string
+		username string
+		uid      string
+		want     string
+	}{
+		{
+			name:     "username takes precedence",
+			username: "user@example.com",
+			uid:      "12345",
+			want:     "user@example.com",
+		},
+		{
+			name:     "uid fallback when username empty",
+			username: "",
+			uid:      "12345",
+			want:     "12345",
+		},
+		{
+			name:     "both empty returns empty",
+			username: "",
+			uid:      "",
+			want:     "",
+		},
+		{
+			name:     "service account username",
+			username: "system:serviceaccount:kube-system:deployment-controller",
+			uid:      "some-uid",
+			want:     "system:serviceaccount:kube-system:deployment-controller",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UserIdentifier(tt.username, tt.uid)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestHashUsername(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -97,7 +138,7 @@ func TestRecordUpdater(t *testing.T) {
 
 			annotations := RecordUpdater(obj, tt.username)
 
-			result := parseHashes(annotations[UpdatersAnnotation])
+			result := ParseHashes(annotations[UpdatersAnnotation])
 			assert.Equal(t, tt.wantHashes, result)
 		})
 	}
@@ -212,7 +253,7 @@ func TestParseHashes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := parseHashes(tt.input)
+			got := ParseHashes(tt.input)
 			assert.Equal(t, tt.want, got)
 		})
 	}

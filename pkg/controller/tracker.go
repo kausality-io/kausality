@@ -50,7 +50,16 @@ func NewTracker(c client.Client, log logr.Logger) *Tracker {
 	}
 }
 
-// HashUsername creates a 5-character base36 hash of a username.
+// UserIdentifier returns the user identifier to use for hashing.
+// Uses username if non-empty, otherwise falls back to UID.
+func UserIdentifier(username, uid string) string {
+	if username != "" {
+		return username
+	}
+	return uid
+}
+
+// HashUsername creates a 5-character base36 hash of a username (or UID).
 func HashUsername(username string) string {
 	h := sha256.Sum256([]byte(username))
 	// Use first 4 bytes as uint32, convert to base36
@@ -74,7 +83,7 @@ func RecordUpdater(obj client.Object, username string) map[string]string {
 
 	// Get existing hashes
 	existing := annotations[UpdatersAnnotation]
-	hashes := parseHashes(existing)
+	hashes := ParseHashes(existing)
 
 	// Add new hash if not already present
 	if !containsHash(hashes, hash) {
@@ -99,7 +108,7 @@ func (t *Tracker) RecordControllerAsync(ctx context.Context, obj client.Object, 
 	annotations := obj.GetAnnotations()
 	if annotations != nil {
 		existing := annotations[ControllersAnnotation]
-		if containsHash(parseHashes(existing), hash) {
+		if containsHash(ParseHashes(existing), hash) {
 			return // Already recorded
 		}
 	}
@@ -146,7 +155,7 @@ func (t *Tracker) flushAfterDelay(ctx context.Context, obj client.Object, delay 
 
 		// Get existing hashes
 		annotations := current.GetAnnotations()
-		hashes := parseHashes(annotations[ControllersAnnotation])
+		hashes := ParseHashes(annotations[ControllersAnnotation])
 
 		// Check if already present
 		if containsHash(hashes, hash) {
@@ -186,14 +195,14 @@ func IdentifyController(child, parent client.Object, username string) (isControl
 	childAnnotations := child.GetAnnotations()
 	var childUpdaters []string
 	if childAnnotations != nil {
-		childUpdaters = parseHashes(childAnnotations[UpdatersAnnotation])
+		childUpdaters = ParseHashes(childAnnotations[UpdatersAnnotation])
 	}
 
 	// Get parent's controllers
 	parentAnnotations := parent.GetAnnotations()
 	var parentControllers []string
 	if parentAnnotations != nil {
-		parentControllers = parseHashes(parentAnnotations[ControllersAnnotation])
+		parentControllers = ParseHashes(parentAnnotations[ControllersAnnotation])
 	}
 
 	// Case 1: Single updater on child - that's the controller
@@ -214,8 +223,8 @@ func IdentifyController(child, parent client.Object, username string) (isControl
 	return false, false
 }
 
-// parseHashes splits a comma-separated hash string.
-func parseHashes(s string) []string {
+// ParseHashes splits a comma-separated hash string.
+func ParseHashes(s string) []string {
 	if s == "" {
 		return nil
 	}

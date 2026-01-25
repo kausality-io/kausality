@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-logr/logr"
 
@@ -124,12 +125,15 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	// Extract fieldManager for trace propagation (still needed for legacy compat)
 	fieldManager := extractFieldManager(req)
 
+	// Get user identifier (username if available, UID as fallback)
+	userID := controller.UserIdentifier(req.UserInfo.Username, req.UserInfo.UID)
+
 	// Add user hash for logging
-	userHash := controller.HashUsername(req.UserInfo.Username)
+	userHash := controller.HashUsername(userID)
 	log = log.WithValues("userHash", userHash, "fieldManager", fieldManager)
 
 	// Detect drift using user hash tracking
-	driftResult, err := h.detector.DetectWithUsername(ctx, obj, req.UserInfo.Username, childUpdaters)
+	driftResult, err := h.detector.DetectWithUsername(ctx, obj, userID, childUpdaters)
 	if err != nil {
 		log.Error(err, "drift detection failed")
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("drift detection failed: %w", err))
@@ -231,7 +235,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 
 	// Propagate trace
-	traceResult, err := h.propagator.PropagateWithFieldManager(ctx, obj, req.UserInfo.Username, fieldManager, string(req.UID))
+	traceResult, err := h.propagator.PropagateWithFieldManager(ctx, obj, userID, fieldManager, string(req.UID))
 	if err != nil {
 		log.Error(err, "trace propagation failed")
 		// Don't fail the request on trace errors - just log and continue
@@ -251,14 +255,26 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		return withWarnings(admission.Allowed(driftResult.Reason), warnings)
 	}
 
-	// Create patch to add/update trace annotation and updaters annotation
-	patch, err := createTracePatchWithUpdaters(obj, traceResult.Trace, req.UserInfo.Username)
+	// Set trace and updater annotations
+	unstrObj := obj.(*unstructured.Unstructured)
+	annotations := unstrObj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[trace.TraceAnnotation] = traceResult.Trace.String()
+	annotations[controller.UpdatersAnnotation] = addHash(
+		annotations[controller.UpdatersAnnotation],
+		userHash,
+	)
+	unstrObj.SetAnnotations(annotations)
+
+	modified, err := json.Marshal(unstrObj.Object)
 	if err != nil {
-		log.Error(err, "failed to create trace patch")
+		log.Error(err, "failed to marshal object")
 		return withWarnings(admission.Allowed(driftResult.Reason), warnings)
 	}
 
-	resp := admission.PatchResponseFromRaw(req.Object.Raw, patch)
+	resp := admission.PatchResponseFromRaw(req.Object.Raw, modified)
 	return withWarnings(resp, warnings)
 }
 
@@ -275,11 +291,14 @@ func (h *Handler) handleStatusUpdate(ctx context.Context, req admission.Request,
 		return admission.Allowed("failed to parse object")
 	}
 
+	// Get user identifier (username if available, UID as fallback)
+	userID := controller.UserIdentifier(req.UserInfo.Username, req.UserInfo.UID)
+
 	// Record the controller asynchronously
 	// This adds the user hash to the object's kausality.io/controllers annotation
-	h.controllerTracker.RecordControllerAsync(ctx, obj, req.UserInfo.Username)
+	h.controllerTracker.RecordControllerAsync(ctx, obj, userID)
 
-	userHash := controller.HashUsername(req.UserInfo.Username)
+	userHash := controller.HashUsername(userID)
 	log.V(1).Info("recorded status updater", "userHash", userHash)
 
 	return admission.Allowed("status update recorded")
@@ -293,37 +312,19 @@ func withWarnings(resp admission.Response, warnings []string) admission.Response
 	return resp
 }
 
-// createTracePatchWithUpdaters creates a JSON patch to set trace and updaters annotations.
-func createTracePatchWithUpdaters(obj client.Object, t trace.Trace, username string) ([]byte, error) {
-	// Get existing annotations and add updater hash
-	annotations := controller.RecordUpdater(obj, username)
-
-	// Set trace annotation
-	annotations[trace.TraceAnnotation] = t.String()
-
-	// Create patched object
-	unstrObj, ok := obj.(*unstructured.Unstructured)
-	if !ok {
-		return nil, fmt.Errorf("expected *unstructured.Unstructured, got %T", obj)
+// addHash adds a hash to a comma-separated string if not already present.
+func addHash(existing, hash string) string {
+	hashes := controller.ParseHashes(existing)
+	for _, h := range hashes {
+		if h == hash {
+			return existing
+		}
 	}
-
-	patched := unstrObj.DeepCopy()
-	patched.SetAnnotations(annotations)
-
-	// Marshal both to JSON
-	original, err := json.Marshal(unstrObj.Object)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal original: %w", err)
+	hashes = append(hashes, hash)
+	if len(hashes) > controller.MaxHashes {
+		hashes = hashes[len(hashes)-controller.MaxHashes:]
 	}
-
-	modified, err := json.Marshal(patched.Object)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal patched: %w", err)
-	}
-
-	// Return the patched object (controller-runtime will compute the diff)
-	_ = original // We return the full patched object, not a diff
-	return modified, nil
+	return strings.Join(hashes, ",")
 }
 
 // parseObject parses the object from the admission request.

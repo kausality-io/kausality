@@ -34,11 +34,11 @@ Kausality is an admission-based drift detection system for Kubernetes. It detect
 
 ### Controller Identification via User Hash Tracking
 
-The system identifies controllers by tracking which users (by `UserInfo.Username`) update parent status vs child spec:
+The system identifies controllers by tracking which users update parent status vs child spec. Users are identified by `UserInfo.Username` with fallback to `UserInfo.UID` for users without names:
 
 **Annotations:**
-- Parent: `kausality.io/controllers` - 5-char base36 hashes of users who update status (max 5)
-- Child: `kausality.io/updaters` - 5-char base36 hashes of users who update spec (max 5)
+- Parent: `kausality.io/controllers` - 5-char base36 hashes of user identifiers who update status (max 5)
+- Child: `kausality.io/updaters` - 5-char base36 hashes of user identifiers who update spec (max 5)
 
 **Recording:**
 - Child CREATE/UPDATE (spec): hash added to child's `updaters` annotation (sync, via patch)
@@ -64,7 +64,7 @@ else → not controller → not drift (new causal origin)
 ### Package Structure
 
 - **`pkg/controller/`** - Controller identification via user hash tracking
-  - `tracker.go` - `HashUsername()`, `RecordUpdater()`, `RecordControllerAsync()`, `IdentifyController()`
+  - `tracker.go` - `UserIdentifier()`, `HashUsername()`, `RecordUpdater()`, `RecordControllerAsync()`, `IdentifyController()`
 
 - **`pkg/drift/`** - Core drift detection logic
   - `detector.go` - Main `Detector` with `DetectWithUsername()` (hash-based) and legacy `DetectWithFieldManager()`
@@ -104,7 +104,7 @@ else → not controller → not drift (new causal origin)
 
 ### Key Design Decisions
 
-1. **Controller identification via user hash tracking**: Controllers are identified by correlating users who update parent status with users who update child spec. Uses 5-char base36 hashes of `UserInfo.Username`. Single child updater = controller; multiple updaters = intersection with parent's status updaters.
+1. **Controller identification via user hash tracking**: Controllers are identified by correlating users who update parent status with users who update child spec. Uses 5-char base36 hashes of user identifiers (username with UID fallback). Single child updater = controller; multiple updaters = intersection with parent's status updaters.
 
 2. **Spec and status interception**: Intercepts spec mutations for drift detection and status subresource updates to record controller identity.
 
@@ -342,6 +342,8 @@ assert.Equal(t, "expected", actual)
    - Important: User modifications are NOT drift - they're a new causal origin. Only the controller's subsequent correction is drift.
 
 ## Commit Conventions
+
+**MUST: Before any commit, review all changes and deeply analyze whether anything can be simplified and clarified.** Write simple, normalized code. A function name must describe what it returns or does - a "patch" is a patch, a "patched object" is not a patch.
 
 Follow the commit message format:
 
