@@ -72,26 +72,3 @@ func hasCondition(conditions []metav1.Condition, conditionType string, status me
 	}
 	return false
 }
-
-// FindCondition returns the condition with the given type, or nil if not found.
-func FindCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition {
-	for i := range conditions {
-		if conditions[i].Type == conditionType {
-			return &conditions[i]
-		}
-	}
-	return nil
-}
-
-// IsDeleting returns true if the parent is in the deletion phase.
-func IsDeleting(state *ParentState) bool {
-	return state != nil && state.DeletionTimestamp != nil
-}
-
-// IsInitializing returns true if the parent is in the initialization phase.
-func IsInitializing(state *ParentState, detector *LifecycleDetector) bool {
-	if detector == nil {
-		detector = NewLifecycleDetector()
-	}
-	return detector.DetectPhase(state) == PhaseInitializing
-}

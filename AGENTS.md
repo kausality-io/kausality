@@ -64,7 +64,7 @@ else → not controller → not drift (new causal origin)
 ### Package Structure
 
 - **`pkg/controller/`** - Controller identification via user hash tracking
-  - `tracker.go` - `UserIdentifier()`, `HashUsername()`, `RecordUpdater()`, `RecordControllerAsync()`, `IdentifyController()`
+  - `tracker.go` - `UserIdentifier()`, `HashUsername()`, `RecordUpdater()`, `RecordControllerAsync()`
 
 - **`pkg/drift/`** - Core drift detection logic
   - `detector.go` - Main `Detector` with `DetectWithUsername()` (hash-based) and legacy `DetectWithFieldManager()`

@@ -185,44 +185,6 @@ func (t *Tracker) flushAfterDelay(ctx context.Context, obj client.Object, delay 
 	}
 }
 
-// IdentifyController determines if the current user is the controller.
-// Returns (isController, canDetermine).
-// If canDetermine is false, we can't reliably identify the controller.
-func IdentifyController(child, parent client.Object, username string) (isController bool, canDetermine bool) {
-	userHash := HashUsername(username)
-
-	// Get child's updaters
-	childAnnotations := child.GetAnnotations()
-	var childUpdaters []string
-	if childAnnotations != nil {
-		childUpdaters = ParseHashes(childAnnotations[UpdatersAnnotation])
-	}
-
-	// Get parent's controllers
-	parentAnnotations := parent.GetAnnotations()
-	var parentControllers []string
-	if parentAnnotations != nil {
-		parentControllers = ParseHashes(parentAnnotations[ControllersAnnotation])
-	}
-
-	// Case 1: Single updater on child - that's the controller
-	if len(childUpdaters) == 1 {
-		controller := childUpdaters[0]
-		return userHash == controller, true
-	}
-
-	// Case 2: Multiple updaters + parent has controllers - use intersection
-	if len(childUpdaters) > 1 && len(parentControllers) > 0 {
-		intersection := Intersect(childUpdaters, parentControllers)
-		if len(intersection) > 0 {
-			return ContainsHash(intersection, userHash), true
-		}
-	}
-
-	// Case 3: Can't determine (multiple updaters, no parent controllers)
-	return false, false
-}
-
 // ParseHashes splits a comma-separated hash string.
 func ParseHashes(s string) []string {
 	if s == "" {
