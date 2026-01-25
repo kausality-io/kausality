@@ -9,3 +9,7 @@ rules:
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  # Need to update resources for async controller annotation updates
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["update", "patch"]

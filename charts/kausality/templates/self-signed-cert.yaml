@@ -53,6 +53,7 @@ webhooks:
       caBundle: {{ $ca }}
     rules:
       {{- range .Values.resourceRules.include }}
+      # Spec changes (CREATE, UPDATE, DELETE)
       - apiGroups:
           {{- toYaml .apiGroups | nindent 10 }}
         apiVersions: ["*"]
@@ -62,6 +63,17 @@ webhooks:
           - CREATE
           - UPDATE
           - DELETE
+        scope: "*"
+      # Status subresource (UPDATE only) - for controller identification
+      - apiGroups:
+          {{- toYaml .apiGroups | nindent 10 }}
+        apiVersions: ["*"]
+        resources:
+          {{- range .resources }}
+          - {{ . }}/status
+          {{- end }}
+        operations:
+          - UPDATE
         scope: "*"
       {{- end }}
     namespaceSelector:
