@@ -5,6 +5,7 @@ package admission_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/kausality-io/kausality/pkg/controller"
 	"github.com/kausality-io/kausality/pkg/drift"
+	ktesting "github.com/kausality-io/kausality/pkg/testing"
 )
 
 // =============================================================================
@@ -313,18 +315,20 @@ func TestRecordControllerAsync_AddsHashAfterDelay(t *testing.T) {
 	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy))
 	assert.Empty(t, deploy.Annotations[controller.ControllersAnnotation], "hash should not be immediate")
 
-	// Wait for async update (5s delay + buffer)
+	// Wait for async update using polling
 	t.Log("Waiting for async annotation update...")
-	time.Sleep(7 * time.Second)
-
-	// Now hash should be there
-	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy))
 	expectedHash := controller.HashUsername(user)
 
-	t.Logf("Controllers annotation after delay: %s", deploy.Annotations[controller.ControllersAnnotation])
-
-	assert.Equal(t, expectedHash, deploy.Annotations[controller.ControllersAnnotation],
-		"controller hash should be recorded after delay")
+	ktesting.Eventually(t, func() (bool, string) {
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+			return false, fmt.Sprintf("failed to get deploy: %v", err)
+		}
+		actual := deploy.Annotations[controller.ControllersAnnotation]
+		if actual != expectedHash {
+			return false, fmt.Sprintf("controllers annotation is %q, waiting for %q", actual, expectedHash)
+		}
+		return true, "controller hash recorded"
+	}, 10*time.Second, 100*time.Millisecond, "controller hash should be recorded after delay")
 }
 
 // =============================================================================

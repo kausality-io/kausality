@@ -95,12 +95,16 @@ func TestMultiSender_SendAsync_FansOut(t *testing.T) {
 
 	// Wait for async sends to complete
 	wg.Wait()
-	time.Sleep(100 * time.Millisecond)
 
-	// Verify all backends received the report
-	for i := 0; i < 3; i++ {
-		assert.Equal(t, int32(1), counts[i].Load(), "backend %d should have received 1 report", i)
-	}
+	// Poll until all backends have received the report
+	require.Eventually(t, func() bool {
+		for i := 0; i < 3; i++ {
+			if counts[i].Load() != 1 {
+				return false
+			}
+		}
+		return true
+	}, time.Second, 10*time.Millisecond, "all backends should receive 1 report")
 }
 
 func TestMultiSender_IsEnabled(t *testing.T) {
