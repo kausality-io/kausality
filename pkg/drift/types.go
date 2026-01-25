@@ -51,9 +51,6 @@ type ParentState struct {
 	ObservedGeneration int64
 	// HasObservedGeneration indicates whether status.observedGeneration exists.
 	HasObservedGeneration bool
-	// ControllerManager is the manager that owns status.observedGeneration.
-	// This identifies the controller that reconciles this object.
-	ControllerManager string
 	// Controllers contains user hashes from kausality.io/controllers annotation.
 	// These are users who have updated the parent's status.
 	Controllers []string

@@ -1,16 +1,13 @@
 package drift
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/structured-merge-diff/v6/fieldpath"
 
 	"github.com/kausality-io/kausality/pkg/controller"
 )
@@ -96,9 +93,6 @@ func extractParentState(parent *unstructured.Unstructured, ownerRef metav1.Owner
 		}
 	}
 
-	// Find the controller manager from managedFields
-	state.ControllerManager = findControllerManager(parent.GetManagedFields())
-
 	// Check for deletion timestamp
 	if parent.GetDeletionTimestamp() != nil {
 		state.DeletionTimestamp = parent.GetDeletionTimestamp()
@@ -112,27 +106,11 @@ func extractParentState(parent *unstructured.Unstructured, ownerRef metav1.Owner
 
 		// Extract controller hashes from kausality.io/controllers annotation
 		if controllers := annotations[controller.ControllersAnnotation]; controllers != "" {
-			state.Controllers = parseControllerHashes(controllers)
+			state.Controllers = controller.ParseHashes(controllers)
 		}
 	}
 
 	return state
-}
-
-// parseControllerHashes splits a comma-separated hash string.
-func parseControllerHashes(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
 }
 
 // extractConditionObservedGeneration extracts observedGeneration from Synced or Ready conditions.
@@ -217,49 +195,4 @@ func ParentRefFromOwnerRef(ref metav1.OwnerReference, namespace string) ParentRe
 		Namespace:  namespace,
 		Name:       ref.Name,
 	}
-}
-
-// findControllerManager finds the manager that owns status.observedGeneration.
-// This identifies the controller that reconciles the object.
-// It checks both status.observedGeneration and status.conditions[].observedGeneration
-// to support Crossplane which stores observedGeneration in conditions.
-func findControllerManager(managedFields []metav1.ManagedFieldsEntry) string {
-	// Path to status.observedGeneration
-	obsGenPath := fieldpath.MakePathOrDie("status", "observedGeneration")
-
-	// Paths to condition observedGeneration (Synced and Ready)
-	// These are structured as: status.conditions[type=X].observedGeneration
-	syncedObsGenPath := fieldpath.MakePathOrDie("status", "conditions",
-		fieldpath.KeyByFields("type", "Synced"), "observedGeneration")
-	readyObsGenPath := fieldpath.MakePathOrDie("status", "conditions",
-		fieldpath.KeyByFields("type", "Ready"), "observedGeneration")
-
-	for _, entry := range managedFields {
-		// Skip non-status updates
-		if entry.Subresource != "status" && entry.Subresource != "" {
-			continue
-		}
-
-		if entry.FieldsV1 == nil || len(entry.FieldsV1.Raw) == 0 {
-			continue
-		}
-
-		// Parse the field set
-		var set fieldpath.Set
-		if err := set.FromJSON(bytes.NewReader(entry.FieldsV1.Raw)); err != nil {
-			continue
-		}
-
-		// Check if this manager owns status.observedGeneration
-		if set.Has(obsGenPath) {
-			return entry.Manager
-		}
-
-		// Fallback: check condition observedGeneration (for Crossplane)
-		if set.Has(syncedObsGenPath) || set.Has(readyObsGenPath) {
-			return entry.Manager
-		}
-	}
-
-	return ""
 }

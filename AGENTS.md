@@ -12,7 +12,7 @@ make lint           # Run golangci-lint
 make lint-fix       # Run golangci-lint with auto-fix
 
 # Run a single test
-go test ./pkg/drift -run TestDetectFromState_Lifecycle -v
+go test ./pkg/drift -run TestIsControllerByHash -v
 
 # Run envtests only
 go test ./pkg/admission -tags=envtest -run TestDriftDetection -v
@@ -69,13 +69,13 @@ For detailed design documentation, see [doc/design/INDEX.md](doc/design/INDEX.md
   - `tracker.go` - `UserIdentifier()`, `HashUsername()`, `RecordUpdater()`, `RecordControllerAsync()`
 
 - **`pkg/drift/`** - Core drift detection logic
-  - `detector.go` - Main `Detector` with `DetectWithUsername()` (hash-based) and legacy `DetectWithFieldManager()`
+  - `detector.go` - Main `Detector` with `Detect()` using user hash tracking
   - `resolver.go` - Resolves parent via controller ownerRef, extracts `ParentState` including `Controllers` hashes
   - `lifecycle.go` - Detects phases: Initializing, Initialized, Deleting
   - `types.go` - `DriftResult`, `ParentState`, `ParentRef`
 
 - **`pkg/trace/`** - Causal trace propagation
-  - `propagator.go` - `PropagateWithFieldManager()` decides origin vs extend
+  - `propagator.go` - `Propagate()` decides origin vs extend based on user hash
   - `types.go` - `Trace`, `Hop` types with JSON serialization
 
 - **`pkg/admission/`** - Admission webhook handler

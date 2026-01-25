@@ -89,12 +89,12 @@ type Snooze struct {
 	Message string `json:"message,omitempty"`
 }
 
-// Matches checks if this approval matches the given child.
-// Supports wildcards: "*" matches any value for apiVersion, kind, or name.
-func (a *Approval) Matches(child ChildRef) bool {
-	return matchField(a.APIVersion, child.APIVersion) &&
-		matchField(a.Kind, child.Kind) &&
-		matchField(a.Name, child.Name)
+// matchChild checks if apiVersion/kind/name match the child.
+// Supports wildcards: "*" matches any value.
+func matchChild(apiVersion, kind, name string, child ChildRef) bool {
+	return matchField(apiVersion, child.APIVersion) &&
+		matchField(kind, child.Kind) &&
+		matchField(name, child.Name)
 }
 
 // matchField checks if a pattern matches a value.
@@ -104,6 +104,12 @@ func matchField(pattern, value string) bool {
 		return true
 	}
 	return pattern == value
+}
+
+// Matches checks if this approval matches the given child.
+// Supports wildcards: "*" matches any value for apiVersion, kind, or name.
+func (a *Approval) Matches(child ChildRef) bool {
+	return matchChild(a.APIVersion, a.Kind, a.Name, child)
 }
 
 // IsValid checks if this approval is valid for the given parent generation.
@@ -126,9 +132,7 @@ func (a *Approval) IsValid(parentGeneration int64) bool {
 // Matches checks if this rejection matches the given child.
 // Supports wildcards: "*" matches any value for apiVersion, kind, or name.
 func (r *Rejection) Matches(child ChildRef) bool {
-	return matchField(r.APIVersion, child.APIVersion) &&
-		matchField(r.Kind, child.Kind) &&
-		matchField(r.Name, child.Name)
+	return matchChild(r.APIVersion, r.Kind, r.Name, child)
 }
 
 // IsActive checks if this rejection is active for the given parent generation.

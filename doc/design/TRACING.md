@@ -39,13 +39,13 @@ Namespace is omitted — it's the same as the object carrying the trace (or clus
 **Origin (new trace):**
 - No controller ownerReference, OR
 - Parent has `generation == observedGeneration` (no active reconciliation), OR
-- `request.fieldManager` does not match parent's `observedGeneration` manager (different actor)
+- Request user is not identified as the controller (via user hash tracking)
 - → Start new trace, this user is the initiator
 
 **Controller hop (extend trace):**
 - Has controller ownerReference with `controller: true` AND
 - Parent has `generation != observedGeneration` (parent is reconciling) AND
-- `request.fieldManager` matches manager of parent's `status.observedGeneration` in managedFields
+- Request user matches controller hashes (intersection of child updaters and parent status updaters)
 - → Copy trace from parent, append new hop
 
 GitOps tools (ArgoCD, Flux) appear as **origins** since they apply manifests directly without `controller: true` ownerReferences. Kubernetes controllers (Deployment→ReplicaSet→Pod) appear as **hops**.

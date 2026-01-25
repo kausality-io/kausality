@@ -29,7 +29,6 @@ func TestDriftReport_JSONRoundTrip(t *testing.T) {
 				UID:                types.UID("parent-uid"),
 				Generation:         5,
 				ObservedGeneration: 5,
-				ControllerManager:  "eks-controller",
 				LifecyclePhase:     "Initialized",
 			},
 			Child: ObjectReference{

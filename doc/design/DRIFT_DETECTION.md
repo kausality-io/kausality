@@ -4,12 +4,12 @@
 
 When a mutation is intercepted, admission:
 
-1. **Identifies the actor** by comparing `request.options.fieldManager` with the parent's controller manager
+1. **Identifies the actor** using user hash tracking (comparing request user with recorded controller hashes)
 2. **Checks the parent's state** (`generation` vs `observedGeneration`)
 
 ```
 parent := resolve via controller ownerReference (controller: true)
-isController := request.fieldManager == parent.managedFields[observedGeneration].manager
+isController := IsControllerByHash(parent.controllers, child.updaters, request.user)
 
 if NOT isController:
     # Different actor → new causal origin (not drift)
@@ -35,50 +35,43 @@ else:
 
 ## Controller Identification
 
-A key challenge is identifying whether a mutation comes from the controller (expected) or another actor (potential drift). We use Kubernetes managedFields for this.
+A key challenge is identifying whether a mutation comes from the controller (expected) or another actor (potential drift). We use **user hash tracking** for this.
 
-**The controller is identified by who updates `status.observedGeneration` on the parent.**
+**The controller is identified by correlating users who update parent status with users who update child spec.**
 
-This is reliable because:
-- Only the reconciling controller updates `observedGeneration`
-- It's tracked in `parent.metadata.managedFields`
-- The manager string stays in sync across upgrades (controller updates both parent status and children)
+**Annotations:**
+- Parent: `kausality.io/controllers` — 5-char base36 hashes of users who update status (max 5)
+- Child: `kausality.io/updaters` — 5-char base36 hashes of users who update spec (max 5)
 
-**Algorithm:**
+**Recording:**
+- Child CREATE/UPDATE (spec): user hash added to child's `updaters` annotation (sync, via patch)
+- Parent status UPDATE: user hash added to parent's `controllers` annotation (sync + async backup)
+
+**Detection algorithm:**
 
 ```
-1. Request comes in for child object
-2. Find parent via controller ownerReference (controller: true)
-3. Look at parent's managedFields → find manager of f:status.f:observedGeneration
-4. Compare request.options.fieldManager with that manager
-5. If match → controller is updating → check parent gen vs obsGen for drift
-6. If no match → different actor → new trace origin (potential drift)
+if child has 1 updater:
+    controller = that single updater
+else if parent has controllers annotation:
+    controller = intersection(child.updaters, parent.controllers)
+else:
+    → can't determine, be lenient (skip drift detection)
+
+if current_user_hash in controller set → controller request → check drift
+else → not controller → not drift (new causal origin)
 ```
 
-**Example managedFields:**
-```yaml
-managedFields:
-- manager: capi-controller
-  operation: Update
-  subresource: status
-  fieldsV1:
-    f:status:
-      f:observedGeneration: {}
-      f:conditions: {}
-```
+**Why user hash tracking instead of fieldManager?**
+- Works reliably across all request types
+- User identity is always available in admission requests
+- Doesn't depend on clients setting fieldManager correctly
+- 5-char hashes keep annotations compact
 
-Here, `capi-controller` is the controller. Any child update with `fieldManager: capi-controller` is from the controller.
+**Late installation:** On first run, parent won't have `kausality.io/controllers`. The system is lenient when it can't determine controller identity, allowing the annotation to build up over time.
 
-**Why not use userInfo.username?**
-- `fieldManager` is available on all mutating requests (Create, Update, Patch)
-- Manager strings stay consistent within a controller's operation
-- No annotation needed — fully dynamic comparison against existing managedFields
+**Non-owning controllers (HPA, VPA):** These don't set controller ownerReferences. They appear as different actors and create new trace origins. This is NOT drift — it's simply a different causal chain. Use ApprovalPolicy to allow known actors like HPA.
 
-**Late installation:** Works automatically. The parent's managedFields already contains the controller's manager string from previous status updates.
-
-**Non-owning controllers (HPA, VPA):** These don't set controller ownerReferences and don't update `observedGeneration`. They appear as different actors and create new trace origins. This is NOT drift — it's simply a different causal chain. Use ApprovalPolicy to allow known actors like HPA.
-
-**Implementation:** Use `sigs.k8s.io/structured-merge-diff` for parsing managedFields. This is the official library used by the Kubernetes API server.
+**Webhook configuration:** Must intercept status subresource updates to record controller identity on parents.
 
 ## Annotation Protection from Controller Sync
 

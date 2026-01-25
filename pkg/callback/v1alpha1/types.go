@@ -97,11 +97,6 @@ type ObjectReference struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// controllerManager is the manager that owns status.observedGeneration.
-	// Only set for parent objects. Identifies the controller.
-	// +optional
-	ControllerManager string `json:"controllerManager,omitempty"`
-
 	// lifecyclePhase is the lifecycle phase (Initializing, Initialized, Deleting).
 	// Only set for parent objects.
 	// +optional

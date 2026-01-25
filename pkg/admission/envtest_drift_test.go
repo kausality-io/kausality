@@ -58,11 +58,8 @@ func TestControllerIdentification_ManagedFields(t *testing.T) {
 		t.Fatal("expected parent state, got nil")
 	}
 
-	t.Logf("Parent state: gen=%d, obsGen=%d, controllerManager=%q",
-		parentState.Generation, parentState.ObservedGeneration, parentState.ControllerManager)
-
-	// The controllerManager should be set from managedFields
-	// (could be empty if no status update created managedFields entry for observedGeneration)
+	t.Logf("Parent state: gen=%d, obsGen=%d, controllers=%v",
+		parentState.Generation, parentState.ObservedGeneration, parentState.Controllers)
 }
 
 // =============================================================================
@@ -82,7 +79,7 @@ func TestDriftDetection_ExpectedChange(t *testing.T) {
 
 	// Detect drift - use test-user with nil childUpdaters (CREATE case, assumes controller)
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.DetectWithUsername(ctx, rs, "test-user", nil)
+	result, err := detector.Detect(ctx, rs, "test-user", nil)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}
@@ -119,7 +116,7 @@ func TestDriftDetection_ExpectedChange(t *testing.T) {
 	t.Logf("After update: gen=%d, obsGen=%d", deploy.Generation, deploy.Status.ObservedGeneration)
 
 	// Now gen != obsGen - should be expected change
-	result, err = detector.DetectWithUsername(ctx, rs, "test-user", nil)
+	result, err = detector.Detect(ctx, rs, "test-user", nil)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}
@@ -164,7 +161,7 @@ func TestDriftDetection_Drift(t *testing.T) {
 
 	// Detect drift - use test-user with nil childUpdaters (CREATE case, assumes controller)
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.DetectWithUsername(ctx, rs, "test-user", nil)
+	result, err := detector.Detect(ctx, rs, "test-user", nil)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}
@@ -197,7 +194,7 @@ func TestLifecyclePhase_Initializing(t *testing.T) {
 
 	// Detect drift - use test-user with nil childUpdaters (CREATE case, assumes controller)
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.DetectWithUsername(ctx, rs, "test-user", nil)
+	result, err := detector.Detect(ctx, rs, "test-user", nil)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}
@@ -258,7 +255,7 @@ func TestLifecyclePhase_Deleting(t *testing.T) {
 
 	// Detect drift - use test-user with nil childUpdaters (CREATE case, assumes controller)
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.DetectWithUsername(ctx, rs, "test-user", nil)
+	result, err := detector.Detect(ctx, rs, "test-user", nil)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}
@@ -292,7 +289,7 @@ func TestNoOwnerReference_RootObject(t *testing.T) {
 
 	// Detect drift on root object - use test-user with nil childUpdaters
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.DetectWithUsername(ctx, deploy, "test-user", nil)
+	result, err := detector.Detect(ctx, deploy, "test-user", nil)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}
@@ -438,7 +435,7 @@ func TestMultipleOwnerRefs_OnlyControllerMatters(t *testing.T) {
 	// Detect drift - should use controllerDeploy (the one with controller: true)
 	// Use test-user with nil childUpdaters (CREATE case, assumes controller)
 	detector := drift.NewDetector(k8sClient)
-	result, err := detector.DetectWithUsername(ctx, rs, "test-user", nil)
+	result, err := detector.Detect(ctx, rs, "test-user", nil)
 	if err != nil {
 		t.Fatalf("drift detection failed: %v", err)
 	}

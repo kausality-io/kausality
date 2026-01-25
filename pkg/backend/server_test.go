@@ -35,7 +35,6 @@ func TestServer_Webhook_ReceivesDriftReport(t *testing.T) {
 				Namespace:          "production",
 				Name:               "api-server",
 				ObservedGeneration: 5,
-				ControllerManager:  "deployment-controller",
 				LifecyclePhase:     "Initialized",
 			},
 			Child: v1alpha1.ObjectReference{
@@ -376,7 +375,6 @@ func TestServer_FullWorkflow(t *testing.T) {
 				Name:               "web-app",
 				Generation:         10,
 				ObservedGeneration: 10,
-				ControllerManager:  "web-controller",
 				LifecyclePhase:     "Initialized",
 			},
 			Child: v1alpha1.ObjectReference{
@@ -418,7 +416,7 @@ func TestServer_FullWorkflow(t *testing.T) {
 
 	var detail StoredReport
 	_ = json.Unmarshal(rec.Body.Bytes(), &detail)
-	assert.Equal(t, "web-controller", detail.Report.Spec.Parent.ControllerManager)
+	assert.Equal(t, "web-app", detail.Report.Spec.Parent.Name)
 
 	// 4. Receive resolution
 	resolved := v1alpha1.DriftReport{

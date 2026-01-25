@@ -61,7 +61,7 @@ func TestControllerIdentification_SingleUpdater(t *testing.T) {
 	// Detect drift with same user - should be identified as controller
 	detector := drift.NewDetector(k8sClient)
 	childUpdaters := drift.ParseUpdaterHashes(rs)
-	result, err := detector.DetectWithUsername(ctx, rs, user1, childUpdaters)
+	result, err := detector.Detect(ctx, rs, user1, childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Result with same user: drift=%v, reason=%s", result.DriftDetected, result.Reason)
@@ -72,7 +72,7 @@ func TestControllerIdentification_SingleUpdater(t *testing.T) {
 
 	// Now try with a different user - should NOT be controller
 	user2 := "kubectl-user@example.com"
-	result2, err := detector.DetectWithUsername(ctx, rs, user2, childUpdaters)
+	result2, err := detector.Detect(ctx, rs, user2, childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Result with different user: drift=%v, reason=%s", result2.DriftDetected, result2.Reason)
@@ -146,7 +146,7 @@ func TestControllerIdentification_MultipleUpdatersIntersection(t *testing.T) {
 	detector := drift.NewDetector(k8sClient)
 	childUpdaters := drift.ParseUpdaterHashes(rs)
 
-	result, err := detector.DetectWithUsername(ctx, rs, controllerUser, childUpdaters)
+	result, err := detector.Detect(ctx, rs, controllerUser, childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Result with controller user: drift=%v, reason=%s", result.DriftDetected, result.Reason)
@@ -155,7 +155,7 @@ func TestControllerIdentification_MultipleUpdatersIntersection(t *testing.T) {
 	assert.True(t, result.DriftDetected, "expected drift when controller updates stable parent")
 
 	// Detect drift with regular user - not in intersection
-	result2, err := detector.DetectWithUsername(ctx, rs, regularUser, childUpdaters)
+	result2, err := detector.Detect(ctx, rs, regularUser, childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Result with regular user: drift=%v, reason=%s", result2.DriftDetected, result2.Reason)
@@ -209,7 +209,7 @@ func TestControllerIdentification_CantDetermine(t *testing.T) {
 	detector := drift.NewDetector(k8sClient)
 	childUpdaters := drift.ParseUpdaterHashes(rs)
 
-	result, err := detector.DetectWithUsername(ctx, rs, "user1", childUpdaters)
+	result, err := detector.Detect(ctx, rs, "user1", childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Result: drift=%v, reason=%s", result.DriftDetected, result.Reason)
@@ -245,7 +245,7 @@ func TestControllerIdentification_CreateFirstUpdater(t *testing.T) {
 	detector := drift.NewDetector(k8sClient)
 	var childUpdaters []string // Empty = CREATE
 
-	result, err := detector.DetectWithUsername(ctx, rs, "creating-user", childUpdaters)
+	result, err := detector.Detect(ctx, rs, "creating-user", childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Result for CREATE: drift=%v, reason=%s", result.DriftDetected, result.Reason)
@@ -418,7 +418,7 @@ func TestControllerIdentification_FullFlow(t *testing.T) {
 	detector := drift.NewDetector(k8sClient)
 	childUpdaters := drift.ParseUpdaterHashes(rs)
 
-	result, err := detector.DetectWithUsername(ctx, rs, regularUser, childUpdaters)
+	result, err := detector.Detect(ctx, rs, regularUser, childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Regular user result: drift=%v, reason=%s", result.DriftDetected, result.Reason)
@@ -426,7 +426,7 @@ func TestControllerIdentification_FullFlow(t *testing.T) {
 
 	// Step 6: Controller tries to correct - SHOULD trigger drift
 	t.Log("Step 6: Checking drift for controller correction")
-	result2, err := detector.DetectWithUsername(ctx, rs, controllerUser, childUpdaters)
+	result2, err := detector.Detect(ctx, rs, controllerUser, childUpdaters)
 	require.NoError(t, err)
 
 	t.Logf("Controller result: drift=%v, reason=%s", result2.DriftDetected, result2.Reason)

@@ -144,7 +144,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	log = log.WithValues("userHash", userHash)
 
 	// Detect drift using user hash tracking
-	driftResult, err := h.detector.DetectWithUsername(ctx, obj, userID, childUpdaters)
+	driftResult, err := h.detector.Detect(ctx, obj, userID, childUpdaters)
 	if err != nil {
 		log.Error(err, "drift detection failed")
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("drift detection failed: %w", err))
@@ -867,7 +867,6 @@ func (h *Handler) buildDriftReport(req admission.Request, obj client.Object, dri
 	if driftResult.ParentState != nil {
 		parentRef.Generation = driftResult.ParentState.Generation
 		parentRef.ObservedGeneration = driftResult.ParentState.ObservedGeneration
-		parentRef.ControllerManager = driftResult.ParentState.ControllerManager
 	}
 	parentRef.LifecyclePhase = string(driftResult.LifecyclePhase)
 

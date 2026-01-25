@@ -3,7 +3,6 @@ package drift
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -43,28 +42,9 @@ func NewDetectorWithOptions(c client.Client, opts ...DetectorOption) *Detector {
 	return d
 }
 
-// DetectWithFieldManager checks whether a mutation would be considered drift.
-// It uses the fieldManager to identify if the request comes from the controller.
-// Deprecated: Use DetectWithUsername for proper controller identification via user hash tracking.
-func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object, fieldManager string) (*DriftResult, error) {
-	// Resolve parent
-	parentState, err := d.resolver.ResolveParent(ctx, obj)
-	if err != nil {
-		return &DriftResult{
-			Allowed: false,
-			Reason:  fmt.Sprintf("failed to resolve parent: %v", err),
-		}, nil
-	}
-
-	// No controller owner reference - allow (not managed by a controller)
-	if parentState == nil {
-		return &DriftResult{
-			Allowed: true,
-			Reason:  "no controller owner reference",
-		}, nil
-	}
-
-	// Determine lifecycle phase
+// checkLifecycle handles lifecycle phase detection and early returns.
+// Returns (result, done) where done=true means caller should return result immediately.
+func (d *Detector) checkLifecycle(parentState *ParentState) (*DriftResult, bool) {
 	phase := d.lifecycleDetector.DetectPhase(parentState)
 
 	result := &DriftResult{
@@ -73,137 +53,71 @@ func (d *Detector) DetectWithFieldManager(ctx context.Context, obj client.Object
 		LifecyclePhase: phase,
 	}
 
-	// Handle lifecycle phases
 	switch phase {
 	case PhaseDeleting:
 		result.Allowed = true
 		result.Reason = "parent is being deleted (cleanup phase)"
-		return result, nil
-
+		return result, true
 	case PhaseInitializing:
 		result.Allowed = true
 		result.Reason = "parent is initializing"
-		return result, nil
-
-	case PhaseInitialized:
-		// Fall through to drift detection
+		return result, true
 	}
 
-	// Check if request comes from the controller
-	isController := IsControllerRequest(parentState, fieldManager)
+	return result, false
+}
 
-	if !isController {
-		// Different actor - not drift, but a new causal origin
-		// (trace propagation will create a new trace for this)
-		result.Allowed = true
-		result.DriftDetected = false
-		result.Reason = fmt.Sprintf("change by different actor %q (controller is %q)",
-			fieldManager, parentState.ControllerManager)
-		return result, nil
-	}
-
-	// Request is from the controller - check generation vs observedGeneration
+// checkGeneration checks generation vs observedGeneration for drift.
+// Must be called when request is from the controller.
+func checkGeneration(result *DriftResult, parentState *ParentState) *DriftResult {
 	if parentState.Generation != parentState.ObservedGeneration {
-		// Parent spec changed - expected change
 		result.Allowed = true
 		result.DriftDetected = false
 		result.Reason = fmt.Sprintf("expected change: parent generation (%d) != observedGeneration (%d)",
 			parentState.Generation, parentState.ObservedGeneration)
-		return result, nil
+		return result
 	}
 
 	// Controller is updating but parent hasn't changed - drift
-	result.Allowed = true // Phase 1: logging only, always allow
+	result.Allowed = true // Phase 1: logging only
 	result.DriftDetected = true
 	result.Reason = fmt.Sprintf("drift detected: parent generation (%d) == observedGeneration (%d)",
 		parentState.Generation, parentState.ObservedGeneration)
-
-	return result, nil
+	return result
 }
 
-// DetectWithUsername checks whether a mutation would be considered drift.
+// Detect checks whether a mutation would be considered drift.
 // It uses user hash tracking to identify if the request comes from the controller.
 // childUpdaters contains the current updater hashes from the child's annotation (before this update).
-func (d *Detector) DetectWithUsername(ctx context.Context, obj client.Object, username string, childUpdaters []string) (*DriftResult, error) {
-	// Resolve parent
+func (d *Detector) Detect(ctx context.Context, obj client.Object, username string, childUpdaters []string) (*DriftResult, error) {
 	parentState, err := d.resolver.ResolveParent(ctx, obj)
 	if err != nil {
-		return &DriftResult{
-			Allowed: false,
-			Reason:  fmt.Sprintf("failed to resolve parent: %v", err),
-		}, nil
+		return &DriftResult{Allowed: false, Reason: fmt.Sprintf("failed to resolve parent: %v", err)}, nil
 	}
-
-	// No controller owner reference - allow (not managed by a controller, can never be drift)
 	if parentState == nil {
-		return &DriftResult{
-			Allowed: true,
-			Reason:  "no controller owner reference",
-		}, nil
+		return &DriftResult{Allowed: true, Reason: "no controller owner reference"}, nil
 	}
 
-	// Determine lifecycle phase
-	phase := d.lifecycleDetector.DetectPhase(parentState)
-
-	result := &DriftResult{
-		ParentRef:      &parentState.Ref,
-		ParentState:    parentState,
-		LifecyclePhase: phase,
-	}
-
-	// Handle lifecycle phases
-	switch phase {
-	case PhaseDeleting:
-		result.Allowed = true
-		result.Reason = "parent is being deleted (cleanup phase)"
+	result, done := d.checkLifecycle(parentState)
+	if done {
 		return result, nil
-
-	case PhaseInitializing:
-		result.Allowed = true
-		result.Reason = "parent is initializing"
-		return result, nil
-
-	case PhaseInitialized:
-		// Fall through to drift detection
 	}
 
-	// Check if request comes from the controller using user hash tracking
 	isController, canDetermine := IsControllerByHash(parentState, username, childUpdaters)
-
 	if !canDetermine {
-		// Can't determine controller identity - be lenient
 		result.Allowed = true
 		result.DriftDetected = false
 		result.Reason = "cannot determine controller identity (multiple updaters, no parent controllers annotation)"
 		return result, nil
 	}
-
 	if !isController {
-		// Different actor - not drift, but a new causal origin
 		result.Allowed = true
 		result.DriftDetected = false
-		userHash := controller.HashUsername(username)
-		result.Reason = fmt.Sprintf("change by different actor (hash %s)", userHash)
+		result.Reason = fmt.Sprintf("change by different actor (hash %s)", controller.HashUsername(username))
 		return result, nil
 	}
 
-	// Request is from the controller - check generation vs observedGeneration
-	if parentState.Generation != parentState.ObservedGeneration {
-		// Parent spec changed - expected change
-		result.Allowed = true
-		result.DriftDetected = false
-		result.Reason = fmt.Sprintf("expected change: parent generation (%d) != observedGeneration (%d)",
-			parentState.Generation, parentState.ObservedGeneration)
-		return result, nil
-	}
-
-	// Controller is updating but parent hasn't changed - drift
-	result.Allowed = true // Phase 1: logging only, always allow
-	result.DriftDetected = true
-	result.Reason = fmt.Sprintf("drift detected: parent generation (%d) == observedGeneration (%d)",
-		parentState.Generation, parentState.ObservedGeneration)
-
-	return result, nil
+	return checkGeneration(result, parentState), nil
 }
 
 // IsControllerByHash checks if the request comes from the controller using user hash tracking.
@@ -234,102 +148,11 @@ func IsControllerByHash(parentState *ParentState, username string, childUpdaters
 	return false, false
 }
 
-// parseUpdaterHashes extracts updater hashes from the child object's annotation.
+// ParseUpdaterHashes extracts updater hashes from the child object's annotation.
 func ParseUpdaterHashes(obj client.Object) []string {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		return nil
 	}
-	updaters := annotations[controller.UpdatersAnnotation]
-	if updaters == "" {
-		return nil
-	}
-	parts := strings.Split(updaters, ",")
-	var result []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
-}
-
-// IsControllerRequest checks if the request comes from the controller.
-// Returns true if:
-// - Controller manager is unknown (can't determine, be lenient)
-// - Field manager is empty (ambiguous, assume controller)
-// - Field manager matches the known controller manager
-func IsControllerRequest(parentState *ParentState, fieldManager string) bool {
-	if parentState.ControllerManager == "" {
-		return true
-	}
-	if fieldManager == "" {
-		return true
-	}
-	return fieldManager == parentState.ControllerManager
-}
-
-// DetectFromStateWithFieldManager checks for drift given parent state and fieldManager.
-func (d *Detector) DetectFromStateWithFieldManager(parentState *ParentState, fieldManager string) *DriftResult {
-	// No parent state - allow
-	if parentState == nil {
-		return &DriftResult{
-			Allowed: true,
-			Reason:  "no parent state provided",
-		}
-	}
-
-	// Determine lifecycle phase
-	phase := d.lifecycleDetector.DetectPhase(parentState)
-
-	result := &DriftResult{
-		ParentRef:      &parentState.Ref,
-		ParentState:    parentState,
-		LifecyclePhase: phase,
-	}
-
-	// Handle lifecycle phases
-	switch phase {
-	case PhaseDeleting:
-		result.Allowed = true
-		result.Reason = "parent is being deleted (cleanup phase)"
-		return result
-
-	case PhaseInitializing:
-		result.Allowed = true
-		result.Reason = "parent is initializing"
-		return result
-
-	case PhaseInitialized:
-		// Fall through to drift detection
-	}
-
-	// Check if request comes from the controller
-	isController := IsControllerRequest(parentState, fieldManager)
-
-	if !isController {
-		// Different actor - not drift, but a new causal origin
-		result.Allowed = true
-		result.DriftDetected = false
-		result.Reason = fmt.Sprintf("change by different actor %q (controller is %q)",
-			fieldManager, parentState.ControllerManager)
-		return result
-	}
-
-	// Core drift detection
-	if parentState.Generation != parentState.ObservedGeneration {
-		result.Allowed = true
-		result.DriftDetected = false
-		result.Reason = fmt.Sprintf("expected change: parent generation (%d) != observedGeneration (%d)",
-			parentState.Generation, parentState.ObservedGeneration)
-		return result
-	}
-
-	result.Allowed = true // Phase 1: logging only
-	result.DriftDetected = true
-	result.Reason = fmt.Sprintf("drift detected: parent generation (%d) == observedGeneration (%d)",
-		parentState.Generation, parentState.ObservedGeneration)
-
-	return result
+	return controller.ParseHashes(annotations[controller.UpdatersAnnotation])
 }
