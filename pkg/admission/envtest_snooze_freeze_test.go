@@ -814,3 +814,131 @@ func TestSnooze_StructuredAnnotation(t *testing.T) {
 
 	t.Log("SUCCESS: Structured snooze annotation suppressed callback while drift was still detected")
 }
+
+// =============================================================================
+// Test: Freeze during Deletion Phase
+// =============================================================================
+
+// TestFreeze_AllowedDuringDeletion verifies that when a parent is being deleted
+// (has deletionTimestamp), mutations are allowed even if freeze is set.
+// This is critical for cleanup - controllers must be able to delete children.
+func TestFreeze_AllowedDuringDeletion(t *testing.T) {
+	ctx := context.Background()
+
+	// Create parent deployment with a finalizer (so delete sets deletionTimestamp)
+	deploy := createDeployment(t, ctx, "freeze-delete-deploy")
+
+	// Add finalizer to prevent immediate deletion
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+	deploy.Finalizers = append(deploy.Finalizers, "test.kausality.io/block-deletion")
+	if err := k8sClient.Update(ctx, deploy); err != nil {
+		t.Fatalf("failed to add finalizer: %v", err)
+	}
+
+	// Create child ReplicaSet FIRST
+	rs := createReplicaSetWithOwner(t, ctx, "freeze-delete-rs", deploy)
+
+	// Add freeze annotation
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+	annotations := deploy.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[approval.FreezeAnnotation] = "true"
+	deploy.SetAnnotations(annotations)
+	if err := k8sClient.Update(ctx, deploy); err != nil {
+		t.Fatalf("failed to add freeze annotation: %v", err)
+	}
+
+	// Set parent as ready (so freeze would normally block)
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+	deploy.Status.ObservedGeneration = deploy.Generation
+	if err := k8sClient.Status().Update(ctx, deploy); err != nil {
+		t.Fatalf("failed to update status: %v", err)
+	}
+
+	// Delete the deployment (sets deletionTimestamp but doesn't delete due to finalizer)
+	if err := k8sClient.Delete(ctx, deploy); err != nil {
+		t.Fatalf("failed to delete deployment: %v", err)
+	}
+
+	// Re-fetch to verify deletionTimestamp is set
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+	if deploy.DeletionTimestamp == nil {
+		t.Fatal("expected deletionTimestamp to be set")
+	}
+	t.Logf("Deployment has deletionTimestamp: %v", deploy.DeletionTimestamp)
+
+	// Verify freeze is still set
+	if deploy.Annotations[approval.FreezeAnnotation] != "true" {
+		t.Fatal("freeze annotation should still be set")
+	}
+
+	// Create handler (enforce mode to make test meaningful)
+	handler := kadmission.NewHandler(kadmission.Config{
+		Client: k8sClient,
+		Log:    ctrl.Log.WithName("test-freeze-delete"),
+		DriftConfig: &config.Config{
+			DriftDetection: config.DriftDetectionConfig{
+				DefaultMode: config.ModeEnforce,
+			},
+		},
+	})
+
+	// Re-fetch RS and set TypeMeta
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(rs), rs); err != nil {
+		t.Fatalf("failed to get rs: %v", err)
+	}
+	rs.APIVersion = "apps/v1"
+	rs.Kind = "ReplicaSet"
+
+	oldRS := rs.DeepCopy()
+	newRS := rs.DeepCopy()
+	newReplicas := int32(3)
+	newRS.Spec.Replicas = &newReplicas
+
+	oldBytes, _ := json.Marshal(oldRS)
+	newBytes, _ := json.Marshal(newRS)
+
+	req := admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			UID:       types.UID("freeze-delete-uid"),
+			Operation: admissionv1.Update,
+			Kind:      metav1.GroupVersionKind{Group: "apps", Version: "v1", Kind: "ReplicaSet"},
+			Namespace: rs.Namespace,
+			Name:      rs.Name,
+			Object:    runtime.RawExtension{Raw: newBytes},
+			OldObject: runtime.RawExtension{Raw: oldBytes},
+			UserInfo:  authenticationv1.UserInfo{Username: "controller"},
+		},
+	}
+
+	// Handle the request
+	resp := handler.Handle(ctx, req)
+
+	t.Logf("Response: allowed=%v, result=%v", resp.Allowed, resp.Result)
+
+	// Should be ALLOWED - freeze doesn't block during deletion
+	if !resp.Allowed {
+		t.Errorf("expected allowed=true during deletion even with freeze, got false")
+		if resp.Result != nil {
+			t.Errorf("denial reason: %s", resp.Result.Message)
+		}
+	}
+
+	t.Log("SUCCESS: Freeze does NOT block mutations when parent is being deleted")
+
+	// Cleanup: remove finalizer to allow deletion
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err == nil {
+		deploy.Finalizers = nil
+		_ = k8sClient.Update(ctx, deploy)
+	}
+}

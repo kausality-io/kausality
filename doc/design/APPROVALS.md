@@ -124,6 +124,8 @@ metadata:
 
 Both annotations support legacy formats for backwards compatibility (`"true"` for freeze, plain RFC3339 timestamp for snooze).
 
+**Exception: Deleting phase** - When a parent has `deletionTimestamp` set (being deleted), freeze does NOT block mutations. This ensures controllers can clean up children during deletion.
+
 ## ApprovalPolicy CRD (Planned)
 
 **Note: This feature is not yet implemented.**

@@ -162,7 +162,8 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 
 	// Check for freeze annotation on parent - blocks ALL mutations, not just drift
-	if driftResult.ParentRef != nil {
+	// Exception: freeze does NOT block during deletion (controllers must clean up children)
+	if driftResult.ParentRef != nil && driftResult.LifecyclePhase != drift.PhaseDeleting {
 		if frozen, freeze := h.checkFreeze(ctx, driftResult.ParentRef, obj.GetNamespace(), log); frozen {
 			freezeMsg := fmt.Sprintf("mutation blocked: parent %s", freeze.String())
 			log.Info("MUTATION FROZEN", append(logFields, "freezeUser", freeze.User, "freezeMessage", freeze.Message)...)

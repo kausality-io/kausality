@@ -508,5 +508,107 @@ func TestLifecyclePhase_InitializedAnnotation(t *testing.T) {
 }
 
 // =============================================================================
+// Test: Metadata-only changes allowed during drift protection
+// =============================================================================
+
+func TestMetadataOnlyChanges_AllowedDuringDriftProtection(t *testing.T) {
+	ctx := context.Background()
+
+	// Create parent deployment
+	deploy := createDeployment(t, ctx, "metadata-only-deploy")
+
+	// Create child ReplicaSet
+	rs := createReplicaSetWithOwner(t, ctx, "metadata-only-rs", deploy)
+
+	// Set parent as ready (drift scenario: gen == obsGen)
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+	deploy.Status.ObservedGeneration = deploy.Generation
+	if err := k8sClient.Status().Update(ctx, deploy); err != nil {
+		t.Fatalf("failed to update status: %v", err)
+	}
+
+	// Re-fetch RS
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(rs), rs); err != nil {
+		t.Fatalf("failed to get rs: %v", err)
+	}
+
+	// Simulate a metadata-only change (adding a label)
+	// This should NOT trigger drift detection
+	labels := rs.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels["test-label"] = "test-value"
+	rs.SetLabels(labels)
+
+	// Update - should succeed without drift detection
+	if err := k8sClient.Update(ctx, rs); err != nil {
+		t.Fatalf("metadata-only update should succeed: %v", err)
+	}
+
+	// Re-fetch and verify label was applied
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(rs), rs); err != nil {
+		t.Fatalf("failed to get rs: %v", err)
+	}
+
+	if rs.Labels["test-label"] != "test-value" {
+		t.Errorf("expected label to be applied, got: %v", rs.Labels)
+	}
+
+	t.Log("SUCCESS: Metadata-only changes are allowed during drift protection")
+}
+
+func TestAnnotationOnlyChanges_AllowedDuringDriftProtection(t *testing.T) {
+	ctx := context.Background()
+
+	// Create parent deployment
+	deploy := createDeployment(t, ctx, "annot-only-deploy")
+
+	// Create child ReplicaSet
+	rs := createReplicaSetWithOwner(t, ctx, "annot-only-rs", deploy)
+
+	// Set parent as ready (drift scenario: gen == obsGen)
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+		t.Fatalf("failed to get deployment: %v", err)
+	}
+	deploy.Status.ObservedGeneration = deploy.Generation
+	if err := k8sClient.Status().Update(ctx, deploy); err != nil {
+		t.Fatalf("failed to update status: %v", err)
+	}
+
+	// Re-fetch RS
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(rs), rs); err != nil {
+		t.Fatalf("failed to get rs: %v", err)
+	}
+
+	// Simulate an annotation-only change
+	// This should NOT trigger drift detection
+	annotations := rs.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations["test-annotation"] = "test-value"
+	rs.SetAnnotations(annotations)
+
+	// Update - should succeed without drift detection
+	if err := k8sClient.Update(ctx, rs); err != nil {
+		t.Fatalf("annotation-only update should succeed: %v", err)
+	}
+
+	// Re-fetch and verify annotation was applied
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(rs), rs); err != nil {
+		t.Fatalf("failed to get rs: %v", err)
+	}
+
+	if rs.Annotations["test-annotation"] != "test-value" {
+		t.Errorf("expected annotation to be applied, got: %v", rs.Annotations)
+	}
+
+	t.Log("SUCCESS: Annotation-only changes are allowed during drift protection")
+}
+
+// =============================================================================
 // Test: Approval - Mode Always
 // =============================================================================
