@@ -50,7 +50,7 @@ Namespace is omitted — it's the same as the object carrying the trace (or clus
 
 GitOps tools (ArgoCD, Flux) appear as **origins** since they apply manifests directly without `controller: true` ownerReferences. Kubernetes controllers (Deployment→ReplicaSet→Pod) appear as **hops**.
 
-Non-owning controllers like HPA also appear as **origins** — they update objects without ownerReferences and don't match the primary controller's manager. Use ApprovalPolicy to allow known actors.
+Non-owning controllers like HPA also appear as **origins** — they update objects without ownerReferences and don't match the primary controller's manager. Currently these are allowed; a planned ApprovalPolicy CRD will enable restricting or explicitly allowing certain actors.
 
 ## Trace Lifecycle
 

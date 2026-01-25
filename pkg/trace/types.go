@@ -35,7 +35,7 @@ type Hop struct {
 	Timestamp time.Time `json:"timestamp"`
 	// Labels contains custom metadata from kausality.io/trace-* annotations.
 	// For example, "kausality.io/trace-ticket=JIRA-123" becomes Labels["ticket"]="JIRA-123".
-	// Labels are propagated from parent to child when extending traces.
+	// Each hop captures labels from its own object; labels are not inherited from parent.
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
