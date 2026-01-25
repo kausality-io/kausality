@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# E2E test script for kausality with Crossplane
-# Creates a kind cluster, installs Crossplane and kausality, and verifies:
-# 1. Trace propagation on Crossplane managed resources
-# 2. Drift detection for Crossplane provider reconciliation
-# 3. Integration with provider-nop for testing
+# E2E test infrastructure setup for kausality with Crossplane
+# This script only sets up the environment - all tests are in Go.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 CLUSTER_NAME="${CLUSTER_NAME:-kausality-crossplane-e2e}"
 NAMESPACE="kausality-system"
 CROSSPLANE_NAMESPACE="crossplane-system"
-TEST_NAMESPACE="crossplane-test"
 TIMEOUT="${TIMEOUT:-300s}"
 
 # Colors for output
@@ -25,17 +21,6 @@ log() { echo -e "${GREEN}[INFO]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; }
 fail() { error "$*"; exit 1; }
-
-# Test assertion helper
-assert() {
-    local description="$1"
-    local condition="$2"
-    if eval "$condition"; then
-        log "PASS: ${description}"
-    else
-        fail "FAIL: ${description}"
-    fi
-}
 
 # Wait for a condition with timeout
 wait_for() {
@@ -67,7 +52,7 @@ if [[ "${SKIP_CLEANUP:-}" != "true" ]]; then
 fi
 
 # Check required tools
-for cmd in kind kubectl helm ko jq; do
+for cmd in kind kubectl helm ko; do
     if ! command -v "$cmd" &>/dev/null; then
         if [[ -x "${ROOT_DIR}/bin/$cmd" ]]; then
             export PATH="${ROOT_DIR}/bin:$PATH"
@@ -78,12 +63,14 @@ for cmd in kind kubectl helm ko jq; do
 done
 
 log "=========================================="
-log "Starting kausality Crossplane E2E tests"
+log "Setting up Crossplane E2E test environment"
 log "=========================================="
 
+# Create kind cluster
 log "Creating kind cluster: ${CLUSTER_NAME}"
 kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/../kind-config.yaml" --wait 120s
 
+# Install Crossplane
 log "Installing Crossplane..."
 helm repo add crossplane-stable https://charts.crossplane.io/stable 2>/dev/null || true
 helm repo update
@@ -96,7 +83,8 @@ helm upgrade --install crossplane crossplane-stable/crossplane \
 log "Waiting for Crossplane to be ready..."
 kubectl wait --for=condition=ready pod -l app=crossplane -n "${CROSSPLANE_NAMESPACE}" --timeout="${TIMEOUT}"
 
-log "Installing provider-nop (for testing)..."
+# Install provider-nop
+log "Installing provider-nop..."
 kubectl apply -f - <<EOF
 apiVersion: pkg.crossplane.io/v1
 kind: Provider
@@ -106,12 +94,12 @@ spec:
   package: xpkg.upbound.io/crossplane-contrib/provider-nop:v0.3.0
 EOF
 
-log "Waiting for provider-nop to be healthy..."
 wait_for "provider-nop to be healthy" \
     "kubectl get provider provider-nop -o jsonpath='{.status.conditions[?(@.type==\"Healthy\")].status}' | grep -q True" \
     120
 
-log "Installing function-patch-and-transform (for pipeline compositions)..."
+# Install function-patch-and-transform
+log "Installing function-patch-and-transform..."
 kubectl apply -f - <<EOF
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
@@ -121,11 +109,11 @@ spec:
   package: xpkg.upbound.io/crossplane-contrib/function-patch-and-transform:v0.7.0
 EOF
 
-log "Waiting for function-patch-and-transform to be healthy..."
 wait_for "function-patch-and-transform to be healthy" \
     "kubectl get function function-patch-and-transform -o jsonpath='{.status.conditions[?(@.type==\"Healthy\")].status}' | grep -q True" \
     120
 
+# Build and load kausality images
 log "Building and loading kausality images with ko..."
 cd "${ROOT_DIR}"
 export KO_DOCKER_REPO="ko.local"
@@ -138,6 +126,7 @@ BACKEND_IMAGE=$(ko build --bare ./cmd/kausality-backend-log)
 log "Built backend image: ${BACKEND_IMAGE}"
 kind load docker-image "${BACKEND_IMAGE}" --name "${CLUSTER_NAME}"
 
+# Install kausality
 log "Installing kausality via Helm..."
 helm upgrade --install kausality "${ROOT_DIR}/charts/kausality" \
     --namespace "${NAMESPACE}" \
@@ -166,224 +155,18 @@ log "Waiting for kausality pods to be ready..."
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality -n "${NAMESPACE}" --timeout="${TIMEOUT}"
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality-backend -n "${NAMESPACE}" --timeout="${TIMEOUT}"
 
-log "Pods are ready:"
+log "Environment ready:"
 kubectl get pods -n "${NAMESPACE}"
 
-log "Creating test namespace..."
-kubectl create namespace "${TEST_NAMESPACE}" 2>/dev/null || true
-
-# ==========================================
-# Test 1: Crossplane NopResource with Trace Labels
-# ==========================================
+# Run Go E2E tests
 log ""
 log "=========================================="
-log "Test 1: NopResource Creation with Trace Labels"
-log "=========================================="
-log "Verify trace labels propagate through Crossplane managed resources"
-
-log "Creating NopResource with trace labels..."
-kubectl apply -f - <<EOF
-apiVersion: nop.crossplane.io/v1alpha1
-kind: NopResource
-metadata:
-  name: trace-test-nop
-  namespace: ${TEST_NAMESPACE}
-  labels:
-    kausality.io/trace-ticket: "CROSSPLANE-001"
-    kausality.io/trace-component: "infrastructure"
-spec:
-  forProvider:
-    conditionAfter:
-      - time: 3s
-        conditionType: Ready
-        conditionStatus: "True"
-EOF
-
-log "Waiting for NopResource to be ready..."
-wait_for "NopResource to have Ready condition" \
-    "kubectl get nopresource trace-test-nop -n ${TEST_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    60
-
-log "Checking NopResource has trace annotation..."
-TRACE_ANNOTATION=$(kubectl get nopresource trace-test-nop -n "${TEST_NAMESPACE}" -o jsonpath='{.metadata.annotations.kausality\.io/trace}' 2>/dev/null || echo "")
-
-if [[ -n "${TRACE_ANNOTATION}" ]]; then
-    log "Trace annotation found: ${TRACE_ANNOTATION}"
-    assert "Trace contains ticket reference" "echo '${TRACE_ANNOTATION}' | grep -q 'CROSSPLANE-001'"
-else
-    log "No trace annotation (expected for direct user creation)"
-fi
-
-# ==========================================
-# Test 2: Provider Reconciliation Detection
-# ==========================================
-log ""
-log "=========================================="
-log "Test 2: Provider Reconciliation Detection"
-log "=========================================="
-log "Verify webhook intercepts provider-nop reconciliation"
-
-log "Creating NopResource that will be reconciled..."
-kubectl apply -f - <<EOF
-apiVersion: nop.crossplane.io/v1alpha1
-kind: NopResource
-metadata:
-  name: reconcile-test-nop
-  namespace: ${TEST_NAMESPACE}
-spec:
-  forProvider:
-    conditionAfter:
-      - time: 2s
-        conditionType: Ready
-        conditionStatus: "True"
-EOF
-
-wait_for "NopResource reconcile-test-nop to be ready" \
-    "kubectl get nopresource reconcile-test-nop -n ${TEST_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-    60
-
-log "Triggering re-reconciliation by updating the resource..."
-kubectl patch nopresource reconcile-test-nop -n "${TEST_NAMESPACE}" --type=merge \
-    -p='{"spec":{"forProvider":{"conditionAfter":[{"time":"5s","conditionType":"Ready","conditionStatus":"True"}]}}}'
-
-sleep 5
-
-log "Checking webhook logs for Crossplane resource processing..."
-WEBHOOK_LOGS=$(kubectl logs -l app.kubernetes.io/name=kausality -n "${NAMESPACE}" --tail=200 2>/dev/null || echo "")
-
-if echo "${WEBHOOK_LOGS}" | grep -qE "nop.crossplane.io|NopResource"; then
-    log "Webhook is intercepting Crossplane NopResource mutations"
-    echo "${WEBHOOK_LOGS}" | grep -E "nop.crossplane.io|NopResource" | tail -5
-else
-    warn "Could not verify webhook is intercepting Crossplane resources"
-fi
-
-# ==========================================
-# Test 3: Backend DriftReport for Crossplane
-# ==========================================
-log ""
-log "=========================================="
-log "Test 3: Backend DriftReport Reception"
-log "=========================================="
-log "Verify DriftReports are generated for Crossplane resources"
-
-log "Checking backend logs..."
-BACKEND_LOGS=$(kubectl logs -l app.kubernetes.io/name=kausality-backend -n "${NAMESPACE}" --tail=200 2>/dev/null || echo "")
-
-if echo "${BACKEND_LOGS}" | grep -qE "DriftReport|Received|kausality"; then
-    log "Backend received reports:"
-    echo "${BACKEND_LOGS}" | grep -E "DriftReport|Received|kausality" | tail -10
-else
-    log "No DriftReports in backend logs (expected if no drift detected)"
-fi
-
-# ==========================================
-# Test 4: Webhook Configuration for Crossplane CRDs
-# ==========================================
-log ""
-log "=========================================="
-log "Test 4: Webhook Configuration Verification"
-log "=========================================="
-
-log "Verifying MutatingWebhookConfiguration includes Crossplane resources..."
-WEBHOOK_CONFIG=$(kubectl get mutatingwebhookconfiguration kausality -o json 2>/dev/null || echo "{}")
-
-assert "MutatingWebhookConfiguration exists" "[[ \$(echo '${WEBHOOK_CONFIG}' | jq -r '.metadata.name') == 'kausality' ]]"
-
-# Check that nop.crossplane.io is in the rules
-NOP_RULE=$(echo "${WEBHOOK_CONFIG}" | jq '.webhooks[0].rules[] | select(.apiGroups[] == "nop.crossplane.io")')
-assert "Webhook rules include nop.crossplane.io" "[[ -n '${NOP_RULE}' ]]"
-
-# ==========================================
-# Test 5: Multiple NopResources
-# ==========================================
-log ""
-log "=========================================="
-log "Test 5: Multiple Resource Handling"
-log "=========================================="
-log "Verify webhook handles multiple Crossplane resources correctly"
-
-log "Creating multiple NopResources..."
-for i in 1 2 3; do
-    kubectl apply -f - <<EOF
-apiVersion: nop.crossplane.io/v1alpha1
-kind: NopResource
-metadata:
-  name: multi-test-nop-${i}
-  namespace: ${TEST_NAMESPACE}
-  labels:
-    kausality.io/trace-batch: "batch-${i}"
-spec:
-  forProvider:
-    conditionAfter:
-      - time: 2s
-        conditionType: Ready
-        conditionStatus: "True"
-EOF
-done
-
-log "Waiting for all NopResources to be ready..."
-for i in 1 2 3; do
-    wait_for "NopResource multi-test-nop-${i} to be ready" \
-        "kubectl get nopresource multi-test-nop-${i} -n ${TEST_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-        60
-done
-
-NOP_COUNT=$(kubectl get nopresource -n "${TEST_NAMESPACE}" --no-headers 2>/dev/null | wc -l | tr -d ' ')
-assert "All NopResources created" "[[ ${NOP_COUNT} -ge 5 ]]"
-
-log "Listing all NopResources:"
-kubectl get nopresource -n "${TEST_NAMESPACE}"
-
-# ==========================================
-# Test 6: Provider Status
-# ==========================================
-log ""
-log "=========================================="
-log "Test 6: Crossplane Provider Status"
-log "=========================================="
-
-log "Verifying provider-nop is healthy..."
-PROVIDER_STATUS=$(kubectl get provider provider-nop -o json)
-
-INSTALLED=$(echo "${PROVIDER_STATUS}" | jq -r '.status.conditions[] | select(.type=="Installed") | .status')
-HEALTHY=$(echo "${PROVIDER_STATUS}" | jq -r '.status.conditions[] | select(.type=="Healthy") | .status')
-
-assert "Provider is installed" "[[ '${INSTALLED}' == 'True' ]]"
-assert "Provider is healthy" "[[ '${HEALTHY}' == 'True' ]]"
-
-# ==========================================
-# Run Go E2E Tests
-# ==========================================
-log ""
-log "=========================================="
-log "Running Go E2E Tests (Crossplane)"
+log "Running Go E2E Tests"
 log "=========================================="
 
 cd "${ROOT_DIR}"
-go test -tags=e2e ./test/e2e/crossplane -v -timeout 5m
+go test -tags=e2e ./test/e2e/crossplane -v -timeout 10m
 
-# ==========================================
-# Summary
-# ==========================================
-log ""
-log "=========================================="
-log "Crossplane E2E Test Summary"
-log "=========================================="
-log "Cluster: ${CLUSTER_NAME}"
-log ""
-log "Crossplane version:"
-kubectl get deployment crossplane -n "${CROSSPLANE_NAMESPACE}" -o jsonpath='{.spec.template.spec.containers[0].image}'
-echo ""
-log ""
-log "Provider-nop status:"
-kubectl get provider provider-nop
-log ""
-log "NopResources in ${TEST_NAMESPACE}:"
-kubectl get nopresource -n "${TEST_NAMESPACE}"
-log ""
-log "Kausality pods:"
-kubectl get pods -n "${NAMESPACE}"
 log ""
 log "=========================================="
 log "All Crossplane E2E tests passed!"
