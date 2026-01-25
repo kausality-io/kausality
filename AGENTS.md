@@ -355,6 +355,27 @@ A task involving code or test changes is NOT done until:
 
 Never commit test changes without running them first.
 
+### E2E Development Workflow
+
+During development, run E2E tests against a **local kind cluster**:
+
+1. **Use existing kind cluster** - Don't create new clusters for each test run
+2. **Ensure dependencies are installed** - Crossplane, provider-nop, function-patch-and-transform
+3. **Run tests directly** - `go test ./test/e2e/crossplane -tags=e2e -v`
+4. **Use tilt for auto-deploy** - `tilt up` for automatic rebuild and deploy on code changes
+
+The `run.sh` scripts are for **CI only** - they create fresh clusters and do full setup.
+
+```bash
+# Local development workflow
+kind create cluster --name dev  # One-time setup
+tilt up                         # Auto-compile and deploy on changes
+go test ./test/e2e/crossplane -tags=e2e -v  # Run tests
+
+# CI workflow (run.sh handles everything)
+./test/e2e/crossplane/run.sh
+```
+
 ## Code Style
 
 - Keep functions focused and small
