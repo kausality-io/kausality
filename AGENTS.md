@@ -420,3 +420,4 @@ tilt up                        # Auto-compile and deploy on code changes
 - Avoid over-engineering - implement what's needed now
 - Add comments only where the logic isn't self-evident
 - Preserve existing formatting unless changing semantics
+- Reading from a nil map returns zero value (no panic) - only initialize before writing

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/go-logr/logr"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -130,33 +130,27 @@ func (t *Tracker) flushAfterDelay(ctx context.Context, obj client.Object, delay 
 	}
 
 	log := t.log.WithValues(
-		"kind", obj.GetObjectKind().GroupVersionKind().Kind,
+		"kind", objectTypeName(obj),
 		"namespace", obj.GetNamespace(),
 		"name", obj.GetName(),
 		"hash", hash,
 	)
 
+	// DeepCopy once, reuse in retry loop
+	current := obj.DeepCopyObject().(client.Object)
+
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		// Fetch current state
-		current := &unstructured.Unstructured{}
-		current.SetGroupVersionKind(obj.GetObjectKind().GroupVersionKind())
 		if err := t.client.Get(ctx, client.ObjectKeyFromObject(obj), current); err != nil {
 			return err
 		}
 
-		// Get current annotations
-		annotations := current.GetAnnotations()
-		if annotations == nil {
-			annotations = make(map[string]string)
-		}
-
 		// Get existing hashes
-		existing := annotations[ControllersAnnotation]
-		hashes := parseHashes(existing)
+		annotations := current.GetAnnotations()
+		hashes := parseHashes(annotations[ControllersAnnotation])
 
 		// Check if already present
 		if containsHash(hashes, hash) {
-			return nil // Already there
+			return nil
 		}
 
 		// Add new hash
@@ -165,6 +159,10 @@ func (t *Tracker) flushAfterDelay(ctx context.Context, obj client.Object, delay 
 			hashes = hashes[len(hashes)-MaxHashes:]
 		}
 
+		// Initialize map only before writing
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
 		annotations[ControllersAnnotation] = strings.Join(hashes, ",")
 		current.SetAnnotations(annotations)
 
@@ -259,6 +257,15 @@ func intersect(a, b []string) []string {
 
 // objectKey returns a string key for an object.
 func objectKey(obj client.Object) string {
+	return objectTypeName(obj) + "/" + obj.GetNamespace() + "/" + obj.GetName()
+}
+
+// objectTypeName returns a readable type name for an object.
+// Uses GVK if available (unstructured), otherwise falls back to Go type name.
+func objectTypeName(obj client.Object) string {
 	gvk := obj.GetObjectKind().GroupVersionKind()
-	return gvk.GroupVersion().String() + "/" + gvk.Kind + "/" + obj.GetNamespace() + "/" + obj.GetName()
+	if gvk.Kind != "" {
+		return gvk.Kind
+	}
+	return reflect.TypeOf(obj).Elem().Name()
 }
