@@ -122,35 +122,30 @@ func extractConditionObservedGeneration(status map[string]interface{}) (int64, b
 		return 0, false
 	}
 
-	// First pass: look for Synced condition
+	// Single pass: find Synced or Ready, preferring Synced
+	var readyObsGen int64
+	var foundReady bool
+
 	for _, c := range conditionsRaw {
 		condMap, ok := c.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		condType, _, _ := unstructured.NestedString(condMap, "type")
-		if condType == "Synced" {
-			if obsGen, ok, _ := unstructured.NestedInt64(condMap, "observedGeneration"); ok {
-				return obsGen, true
-			}
-		}
-	}
-
-	// Second pass: fall back to Ready condition
-	for _, c := range conditionsRaw {
-		condMap, ok := c.(map[string]interface{})
-		if !ok {
+		obsGen, hasObsGen, _ := unstructured.NestedInt64(condMap, "observedGeneration")
+		if !hasObsGen {
 			continue
 		}
-		condType, _, _ := unstructured.NestedString(condMap, "type")
-		if condType == "Ready" {
-			if obsGen, ok, _ := unstructured.NestedInt64(condMap, "observedGeneration"); ok {
-				return obsGen, true
-			}
+		if condType == ConditionTypeSynced {
+			return obsGen, true // Synced takes priority, return immediately
+		}
+		if condType == ConditionTypeReady {
+			readyObsGen = obsGen
+			foundReady = true
 		}
 	}
 
-	return 0, false
+	return readyObsGen, foundReady
 }
 
 // extractConditions extracts metav1.Condition list from status map.

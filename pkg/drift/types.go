@@ -74,6 +74,13 @@ const (
 	PhaseDeleting LifecyclePhase = "Deleting"
 )
 
+// Condition types used for initialization and observedGeneration detection.
+const (
+	ConditionTypeInitialized = "Initialized"
+	ConditionTypeReady       = "Ready"
+	ConditionTypeSynced      = "Synced"
+)
+
 // InitializationDetector determines how to detect initialization.
 type InitializationDetector int
 

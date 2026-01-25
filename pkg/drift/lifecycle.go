@@ -53,9 +53,9 @@ func (d *LifecycleDetector) DetectPhase(state *ParentState) LifecyclePhase {
 func (d *LifecycleDetector) checkInitialized(state *ParentState, detector InitializationDetector) bool {
 	switch detector {
 	case DetectByInitializedCondition:
-		return hasCondition(state.Conditions, "Initialized", metav1.ConditionTrue)
+		return hasCondition(state.Conditions, ConditionTypeInitialized, metav1.ConditionTrue)
 	case DetectByReadyCondition:
-		return hasCondition(state.Conditions, "Ready", metav1.ConditionTrue)
+		return hasCondition(state.Conditions, ConditionTypeReady, metav1.ConditionTrue)
 	case DetectByObservedGeneration:
 		return state.HasObservedGeneration
 	default:
