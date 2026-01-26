@@ -29,7 +29,7 @@ func TestBackendPodReady(t *testing.T) {
 
 	ktesting.Eventually(t, func() (bool, string) {
 		pods, err := clientset.CoreV1().Pods(kausalityNS).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/name=kausality-backend",
+			LabelSelector: "app.kubernetes.io/name=kausality-backend-log",
 		})
 		if err != nil {
 			return false, fmt.Sprintf("error listing backend pods: %v", err)
@@ -140,7 +140,7 @@ func TestBackendReceivesDriftReports(t *testing.T) {
 
 	ktesting.Eventually(t, func() (bool, string) {
 		pods, err := clientset.CoreV1().Pods(kausalityNS).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/name=kausality-backend",
+			LabelSelector: "app.kubernetes.io/name=kausality-backend-log",
 		})
 		if err != nil {
 			return false, fmt.Sprintf("error listing backend pods: %v", err)

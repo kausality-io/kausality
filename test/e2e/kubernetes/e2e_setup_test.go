@@ -28,7 +28,7 @@ func TestKausalityPodsReady(t *testing.T) {
 
 	ktesting.Eventually(t, func() (bool, string) {
 		pods, err := clientset.CoreV1().Pods(kausalityNS).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/name=kausality",
+			LabelSelector: "app.kubernetes.io/name=kausality-webhook",
 		})
 		if err != nil {
 			return false, fmt.Sprintf("error listing pods: %v", err)

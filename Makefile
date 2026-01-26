@@ -146,6 +146,7 @@ install-e2e: helm ## Install kausality for E2E tests. Requires WEBHOOK_IMAGE, CO
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality-controller -n kausality-system --timeout=180s
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality-backend-log -n kausality-system --timeout=180s
 	kubectl apply -f test/e2e/kubernetes/kausality-policy.yaml
+	kubectl wait kausality/apps --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=60s
 
 .PHONY: install-e2e-crossplane
 install-e2e-crossplane: helm ## Install kausality for Crossplane E2E tests. Requires WEBHOOK_IMAGE, CONTROLLER_IMAGE, and BACKEND_IMAGE.
@@ -172,6 +173,7 @@ install-e2e-crossplane: helm ## Install kausality for Crossplane E2E tests. Requ
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality-controller -n kausality-system --timeout=180s
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality-backend-log -n kausality-system --timeout=180s
 	kubectl apply -f test/e2e/crossplane/kausality-policy.yaml
+	kubectl wait kausality/crossplane --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=60s
 
 ##@ Deployment
 
