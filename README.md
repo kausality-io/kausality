@@ -34,7 +34,7 @@
 
 We deployed a cluster with 1000 B200 GPU nodes — the expensive kind 💸. Burn-in was done carefully — nodes scaled up manually in the AWS console, slowly, deliberately, correctly. It worked.
 
-A few days later, we deployed our controllers. One composition change removed an unrelated AWS add-on. That was enough. Terraform was triggered. Terraform reconciled the cluster. The desired state said: far fewer than 1000 nodes. Terraform did exactly what it was told.
+A few days later, we rolled out an update of our controllers. One composition change removed an unrelated AWS add-on. That was enough. Terraform was triggered. Terraform reconciled the cluster. The desired state said: far fewer than 1000 nodes. Terraform did exactly what it was told.
 
 **Reality had drifted. Intent had not been recorded.**
 
