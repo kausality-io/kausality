@@ -40,6 +40,8 @@ A few days later, we rolled out an update of our controllers. One composition ch
 
 The system had no concept of *why* the cluster looked the way it did — only what the declarative snapshot said. No bug. Hundreds of nodes gone. An expensive incident 💸.
 
+This story is about Terraform, but the same applies to Crossplane, Pulumi, or any declarative IaC tool. It's a foundational problem: **declarative systems converge to declared state, not intended state.**
+
 This is the class of failure Kausality is built to prevent.
 
 **Kausality captures causality, ownership, and intent:**
