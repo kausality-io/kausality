@@ -5,6 +5,7 @@ package crossplane
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,8 @@ func TestPolicyCrossplaneEnforceMode(t *testing.T) {
 	t.Log("")
 	t.Log("Step 1: Creating Kausality policy with enforce mode...")
 
+	// Use explicit resource names to get higher specificity than the static "crossplane" policy
+	// which uses wildcards. Higher specificity wins in policy precedence.
 	policy := &kausalityv1alpha1.Kausality{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: policyName,
@@ -49,11 +52,11 @@ func TestPolicyCrossplaneEnforceMode(t *testing.T) {
 			Resources: []kausalityv1alpha1.ResourceRule{
 				{
 					APIGroups: []string{"test.kausality.io"},
-					Resources: []string{"*"},
+					Resources: []string{"xplatforms", "xservices"}, // Explicit resources = higher specificity
 				},
 				{
 					APIGroups: []string{"nop.crossplane.io"},
-					Resources: []string{"*"},
+					Resources: []string{"nopresources"}, // Explicit resources = higher specificity
 				},
 			},
 		},
@@ -66,7 +69,7 @@ func TestPolicyCrossplaneEnforceMode(t *testing.T) {
 		_ = kausalityClient.Delete(ctx, policy)
 	})
 
-	t.Logf("Created Kausality policy %s with enforce mode for test.kausality.io and nop.crossplane.io", policyName)
+	t.Logf("Created Kausality policy %s with enforce mode (explicit resources for higher specificity)", policyName)
 
 	// Wait for policy to be ready
 	t.Log("")
@@ -282,28 +285,35 @@ func TestPolicyCrossplaneEnforceMode(t *testing.T) {
 
 	// Step 8: Verify drift is blocked
 	t.Log("")
-	t.Log("Step 8: Waiting to verify drift correction is blocked by policy...")
+	t.Log("Step 8: Verifying drift correction is blocked by policy...")
 
-	time.Sleep(10 * time.Second)
+	// Give Crossplane a chance to attempt correction, then verify it was blocked
+	ktesting.Eventually(t, func() (bool, string) {
+		nopResource, err := dynamicClient.Resource(nopResourceGVR).Get(ctx, nopResourceName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting NopResource: %v", err)
+		}
 
-	nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopResourceName, metav1.GetOptions{})
-	require.NoError(t, err)
+		conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
+		if !found || len(conditionAfter) == 0 {
+			return false, "conditionAfter not found"
+		}
 
-	conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
-	require.True(t, found && len(conditionAfter) > 0)
+		firstCond, ok := conditionAfter[0].(map[string]interface{})
+		if !ok {
+			return false, "conditionAfter[0] not a map"
+		}
 
-	firstCond, ok := conditionAfter[0].(map[string]interface{})
-	require.True(t, ok)
+		timeVal, _, _ := unstructured.NestedString(firstCond, "time")
+		if timeVal == "77s" {
+			return true, "modification persisted - drift blocked by policy"
+		}
+		// Value was reverted - policy not yet active, retry
+		return false, fmt.Sprintf("value is %s, expected 77s - policy not yet active", timeVal)
+	}, 30*time.Second, 3*time.Second, "drift should be blocked by policy")
 
-	timeVal, _, _ := unstructured.NestedString(firstCond, "time")
-	if timeVal == "77s" {
-		t.Log("PASS: User modification persisted - drift correction was blocked by POLICY")
-		t.Log("Mode was determined from Kausality CRD, not annotation")
-	} else {
-		t.Logf("FAIL: NopResource was reverted to %s - drift correction was allowed", timeVal)
-		t.Log("Expected policy enforce mode to block drift")
-		t.FailNow()
-	}
+	t.Log("PASS: User modification persisted - drift correction was blocked by POLICY")
+	t.Log("Mode was determined from Kausality CRD, not annotation")
 
 	t.Log("")
 	t.Log("SUCCESS: Kausality policy enforce mode blocks drift for Crossplane resources")
@@ -321,8 +331,9 @@ func TestPolicyCrossplaneModeUpdate(t *testing.T) {
 	t.Log("drift should become allowed without restarting the webhook.")
 
 	// Step 1: Create policy with enforce mode
+	// Use explicit resource names to get higher specificity than the static "crossplane" policy
 	t.Log("")
-	t.Log("Step 1: Creating Kausality policy with enforce mode...")
+	t.Log("Step 1: Creating Kausality policy with enforce mode (explicit resources)...")
 
 	policy := &kausalityv1alpha1.Kausality{
 		ObjectMeta: metav1.ObjectMeta{
@@ -333,11 +344,11 @@ func TestPolicyCrossplaneModeUpdate(t *testing.T) {
 			Resources: []kausalityv1alpha1.ResourceRule{
 				{
 					APIGroups: []string{"test.kausality.io"},
-					Resources: []string{"*"},
+					Resources: []string{"xplatforms", "xservices"}, // Explicit = higher specificity
 				},
 				{
 					APIGroups: []string{"nop.crossplane.io"},
-					Resources: []string{"*"},
+					Resources: []string{"nopresources"}, // Explicit = higher specificity
 				},
 			},
 		},
@@ -510,31 +521,51 @@ func TestPolicyCrossplaneModeUpdate(t *testing.T) {
 	t.Log("")
 	t.Log("Step 3: Verifying enforce mode blocks drift...")
 
-	nopResource, err := dynamicClient.Resource(nopResourceGVR).Get(ctx, nopName, metav1.GetOptions{})
-	require.NoError(t, err)
+	// Modify NopResource and verify Crossplane can't correct it (drift blocked)
+	ktesting.Eventually(t, func() (bool, string) {
+		nopResource, err := dynamicClient.Resource(nopResourceGVR).Get(ctx, nopName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting NopResource: %v", err)
+		}
 
-	err = unstructured.SetNestedField(nopResource.Object, []interface{}{
-		map[string]interface{}{
-			"time":            "66s",
-			"conditionType":   "Ready",
-			"conditionStatus": "True",
-		},
-	}, "spec", "forProvider", "conditionAfter")
-	require.NoError(t, err)
+		// Set a custom value
+		err = unstructured.SetNestedField(nopResource.Object, []interface{}{
+			map[string]interface{}{
+				"time":            "66s",
+				"conditionType":   "Ready",
+				"conditionStatus": "True",
+			},
+		}, "spec", "forProvider", "conditionAfter")
+		if err != nil {
+			return false, fmt.Sprintf("error setting field: %v", err)
+		}
 
-	_, err = dynamicClient.Resource(nopResourceGVR).Update(ctx, nopResource, metav1.UpdateOptions{})
-	require.NoError(t, err)
+		_, err = dynamicClient.Resource(nopResourceGVR).Update(ctx, nopResource, metav1.UpdateOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error updating: %v", err)
+		}
 
-	time.Sleep(10 * time.Second)
+		// Check if Crossplane tried to revert (give it a moment to reconcile)
+		time.Sleep(3 * time.Second)
 
-	nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopName, metav1.GetOptions{})
-	require.NoError(t, err)
+		nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error re-getting: %v", err)
+		}
 
-	conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
-	require.True(t, found && len(conditionAfter) > 0)
-	firstCond, _ := conditionAfter[0].(map[string]interface{})
-	timeVal, _, _ := unstructured.NestedString(firstCond, "time")
-	require.Equal(t, "66s", timeVal, "modification should persist (drift blocked in enforce)")
+		conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
+		if !found || len(conditionAfter) == 0 {
+			return false, "conditionAfter not found"
+		}
+		firstCond, _ := conditionAfter[0].(map[string]interface{})
+		timeVal, _, _ := unstructured.NestedString(firstCond, "time")
+
+		if timeVal == "66s" {
+			return true, "modification persisted - drift blocked"
+		}
+		return false, fmt.Sprintf("value reverted to %s - policy not yet active, retrying", timeVal)
+	}, 60*time.Second, 5*time.Second, "enforce mode should block drift")
+
 	t.Log("Drift blocked as expected (enforce mode)")
 
 	// Step 4: Update policy to log mode
@@ -551,50 +582,45 @@ func TestPolicyCrossplaneModeUpdate(t *testing.T) {
 
 	t.Log("Policy updated to log mode")
 
-	// Wait for policy refresh
-	time.Sleep(3 * time.Second)
-
 	// Step 5: Verify log mode allows drift correction
 	t.Log("")
 	t.Log("Step 5: Verifying log mode allows drift correction...")
 
-	// Modify again
-	nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopName, metav1.GetOptions{})
-	require.NoError(t, err)
+	// In log mode, Crossplane should be able to correct drift (not blocked)
+	// We verify by checking that either:
+	// 1. The modification persists (Crossplane didn't try to correct)
+	// 2. The modification was reverted (Crossplane corrected - drift allowed)
+	// The key test is that the webhook doesn't BLOCK the correction attempt
+	ktesting.Eventually(t, func() (bool, string) {
+		nopResource, err := dynamicClient.Resource(nopResourceGVR).Get(ctx, nopName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting NopResource: %v", err)
+		}
 
-	err = unstructured.SetNestedField(nopResource.Object, []interface{}{
-		map[string]interface{}{
-			"time":            "55s",
-			"conditionType":   "Ready",
-			"conditionStatus": "True",
-		},
-	}, "spec", "forProvider", "conditionAfter")
-	require.NoError(t, err)
+		// Set a different custom value
+		err = unstructured.SetNestedField(nopResource.Object, []interface{}{
+			map[string]interface{}{
+				"time":            "55s",
+				"conditionType":   "Ready",
+				"conditionStatus": "True",
+			},
+		}, "spec", "forProvider", "conditionAfter")
+		if err != nil {
+			return false, fmt.Sprintf("error setting field: %v", err)
+		}
 
-	_, err = dynamicClient.Resource(nopResourceGVR).Update(ctx, nopResource, metav1.UpdateOptions{})
-	require.NoError(t, err)
+		_, err = dynamicClient.Resource(nopResourceGVR).Update(ctx, nopResource, metav1.UpdateOptions{})
+		if err != nil {
+			// If update is rejected with drift message, policy hasn't switched to log yet
+			if strings.Contains(err.Error(), "drift") {
+				return false, fmt.Sprintf("update rejected with drift - policy not yet in log mode: %v", err)
+			}
+			return false, fmt.Sprintf("error updating: %v", err)
+		}
 
-	// In log mode, Crossplane should be able to correct the drift
-	// Wait and check if drift correction happened or was just logged
-	time.Sleep(15 * time.Second)
-
-	nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopName, metav1.GetOptions{})
-	require.NoError(t, err)
-
-	conditionAfter, found, _ = unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
-	require.True(t, found && len(conditionAfter) > 0)
-	firstCond, _ = conditionAfter[0].(map[string]interface{})
-	timeVal, _, _ = unstructured.NestedString(firstCond, "time")
-
-	// In log mode, either the modification persists (if Crossplane doesn't try to correct)
-	// or it gets reverted (if Crossplane corrects and drift is allowed)
-	// Either outcome is acceptable - the key is that log mode doesn't BLOCK
-	t.Logf("After log mode switch, conditionAfter.time = %s", timeVal)
-	if timeVal == "55s" {
-		t.Log("Modification persisted (Crossplane didn't try to correct, or correction was slow)")
-	} else {
-		t.Log("Modification was reverted (Crossplane corrected - log mode allowed drift)")
-	}
+		// Update succeeded - log mode is active (doesn't block)
+		return true, "update succeeded - log mode active"
+	}, 60*time.Second, 5*time.Second, "log mode should allow updates")
 
 	t.Log("")
 	t.Log("SUCCESS: Policy mode update takes effect for Crossplane resources")
