@@ -17,6 +17,7 @@ import (
 	"github.com/kausality-io/kausality/pkg/admission"
 	"github.com/kausality-io/kausality/pkg/callback"
 	"github.com/kausality-io/kausality/pkg/config"
+	"github.com/kausality-io/kausality/pkg/policy"
 )
 
 // Config configures the webhook server.
@@ -43,6 +44,9 @@ type Config struct {
 	// CallbackSender sends drift reports to webhook endpoints.
 	// If nil, drift callbacks are disabled.
 	CallbackSender callback.ReportSender
+	// PolicyStore provides CRD-based policy configuration.
+	// If nil, falls back to DriftConfig.
+	PolicyStore *policy.Store
 }
 
 // Server is a standalone webhook server for drift detection.
@@ -94,6 +98,7 @@ func (s *Server) Register() {
 		Log:            s.log,
 		DriftConfig:    s.config.DriftConfig,
 		CallbackSender: s.config.CallbackSender,
+		PolicyStore:    s.config.PolicyStore,
 	})
 
 	s.webhookServer.Register("/mutate", &webhook.Admission{Handler: handler})

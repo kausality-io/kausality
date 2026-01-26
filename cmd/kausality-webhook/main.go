@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-logr/logr"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/kausality-io/kausality/cmd/kausality-webhook/pkg/webhook"
 	"github.com/kausality-io/kausality/pkg/callback"
 	"github.com/kausality-io/kausality/pkg/config"
+	"github.com/kausality-io/kausality/pkg/policy"
 )
 
 var (
@@ -126,6 +128,34 @@ func main() {
 		}
 	}
 
+	// Setup signal handling context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create policy store and initial refresh
+	policyStore := policy.NewStore(k8sClient, log)
+	if err := policyStore.Refresh(ctx); err != nil {
+		log.Error(err, "initial policy refresh failed (continuing with empty cache)")
+	} else {
+		log.Info("policy store initialized")
+	}
+
+	// Start background policy refresh
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := policyStore.Refresh(ctx); err != nil {
+					log.Error(err, "policy refresh failed")
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Create and start webhook server
 	server := webhook.NewServer(webhook.Config{
 		Client:                 k8sClient,
@@ -136,13 +166,10 @@ func main() {
 		HealthProbeBindAddress: healthProbeBindAddress,
 		DriftConfig:            driftConfig,
 		CallbackSender:         callbackSender,
+		PolicyStore:            policyStore,
 	})
 
 	server.Register()
-
-	// Setup signal handling
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go handleSignals(ctx, cancel, log)
 
