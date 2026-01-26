@@ -1,5 +1,7 @@
 # Kausality policy for Crossplane E2E tests
 # Tracks Crossplane and test resources (additive to apps policy)
+# NOTE: Using explicit resources instead of "*" to avoid discovery timing issues.
+# The discovery API may not have the CRDs registered when the policy is first processed.
 apiVersion: kausality.io/v1alpha1
 kind: Kausality
 metadata:
@@ -7,7 +9,9 @@ metadata:
 spec:
   mode: enforce
   resources:
+    # Explicit resources - provider-nop creates nopresources
     - apiGroups: ["nop.crossplane.io"]
-      resources: ["*"]
+      resources: ["nopresources"]
+    # Crossplane composites - XRDs create xplatforms and xservices
     - apiGroups: ["test.kausality.io"]
-      resources: ["*"]
+      resources: ["xplatforms", "xservices"]
