@@ -38,7 +38,7 @@ A few days later, we rolled out an update of our controllers. One composition ch
 
 **Reality had drifted. Intent had not been recorded.**
 
-The system had no concept of *why* the cluster looked the way it did — only what the declarative snapshot said. No bug. No outage. Just an expensive reminder 💸.
+The system had no concept of *why* the cluster looked the way it did — only what the declarative snapshot said. No bug. Hundreds of nodes gone. An expensive incident 💸.
 
 This is the class of failure Kausality is built to prevent.
 
