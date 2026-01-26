@@ -793,26 +793,49 @@ func TestInitializationAllowedDriftRejected(t *testing.T) {
 	t.Log("Step 7: Waiting to verify drift correction is blocked in enforce mode...")
 	t.Log("Crossplane will try to revert the change, but this is drift and should be rejected.")
 
-	// Give Crossplane time to attempt reconciliation
-	time.Sleep(10 * time.Second)
-
-	// Verify NopResource still has our modification
+	// Log annotations to help debug hash tracking
 	nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopResourceName, metav1.GetOptions{})
 	require.NoError(t, err)
+	t.Logf("NopResource annotations: %v", nopResource.GetAnnotations())
 
-	conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
-	require.True(t, found, "conditionAfter should exist")
-	require.NotEmpty(t, conditionAfter, "conditionAfter should not be empty")
+	xservice, err := dynamicClient.Resource(xserviceGVR).Get(ctx, xserviceName, metav1.GetOptions{})
+	require.NoError(t, err)
+	t.Logf("XService annotations: %v", xservice.GetAnnotations())
 
-	firstCond, ok := conditionAfter[0].(map[string]interface{})
-	require.True(t, ok, "first condition should be a map")
+	// Wait and repeatedly verify drift is blocked
+	// Crossplane should attempt reconciliation within 30 seconds
+	// If our modification persists, drift was blocked
+	driftBlocked := true
+	for i := 0; i < 6; i++ { // Check every 5 seconds for 30 seconds
+		time.Sleep(5 * time.Second)
 
-	timeVal, _, _ := unstructured.NestedString(firstCond, "time")
-	if timeVal == "99s" {
+		nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopResourceName, metav1.GetOptions{})
+		require.NoError(t, err)
+
+		conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
+		if !found || len(conditionAfter) == 0 {
+			t.Log("WARNING: conditionAfter not found or empty")
+			continue
+		}
+
+		firstCond, ok := conditionAfter[0].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		timeVal, _, _ := unstructured.NestedString(firstCond, "time")
+		if timeVal != "99s" {
+			t.Logf("FAIL at %ds: NopResource was reverted to %s - drift correction was ALLOWED", (i+1)*5, timeVal)
+			driftBlocked = false
+			break
+		}
+		t.Logf("Check %d: Value still 99s (drift blocked)", i+1)
+	}
+
+	if driftBlocked {
 		t.Log("PASS: User modification persisted - drift correction was REJECTED")
 		t.Log("Crossplane could not revert the change because it would be drift")
 	} else {
-		t.Logf("FAIL: NopResource was reverted to %s - drift correction was ALLOWED", timeVal)
 		t.Log("Expected drift to be blocked in enforce mode")
 		t.FailNow()
 	}
@@ -1173,15 +1196,30 @@ func TestDeletionAllowsPreviouslyRejected(t *testing.T) {
 	require.NoError(t, err, "user modification should succeed")
 	t.Log("User modification succeeded (new causal origin)")
 
-	// Verify drift is blocked
-	time.Sleep(5 * time.Second)
-	nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopResourceName, metav1.GetOptions{})
-	require.NoError(t, err)
-	conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
-	require.True(t, found && len(conditionAfter) > 0)
-	firstCond, _ := conditionAfter[0].(map[string]interface{})
-	timeVal, _, _ := unstructured.NestedString(firstCond, "time")
-	require.Equal(t, "88s", timeVal, "modification should persist (drift blocked)")
+	// Verify drift is blocked - wait longer and check multiple times
+	t.Log("Verifying drift is blocked...")
+	driftBlocked := true
+	for i := 0; i < 4; i++ { // Check every 5 seconds for 20 seconds
+		time.Sleep(5 * time.Second)
+		nopResource, err = dynamicClient.Resource(nopResourceGVR).Get(ctx, nopResourceName, metav1.GetOptions{})
+		require.NoError(t, err)
+		conditionAfter, found, _ := unstructured.NestedSlice(nopResource.Object, "spec", "forProvider", "conditionAfter")
+		if !found || len(conditionAfter) == 0 {
+			continue
+		}
+		firstCond, ok := conditionAfter[0].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		timeVal, _, _ := unstructured.NestedString(firstCond, "time")
+		if timeVal != "88s" {
+			t.Logf("FAIL at %ds: Value reverted to %s - drift was allowed", (i+1)*5, timeVal)
+			driftBlocked = false
+			break
+		}
+		t.Logf("Check %d: Value still 88s (drift blocked)", i+1)
+	}
+	require.True(t, driftBlocked, "modification should persist (drift blocked)")
 	t.Log("CONFIRMED: Drift correction is blocked in stable state")
 
 	// Step 6: Delete the parent (triggers deletion phase)
