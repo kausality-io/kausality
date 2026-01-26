@@ -12,7 +12,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/kausality-io/kausality/pkg/cli"
+	"github.com/kausality-io/kausality/cmd/kausality-cli/pkg/cli"
 )
 
 func main() {
