@@ -135,108 +135,100 @@ helm install kausality ./charts/kausality \
   --create-namespace
 ```
 
-### Configuration
-
-See [charts/kausality/values.yaml](charts/kausality/values.yaml) for all available options.
-
-Key configuration options:
-
-```yaml
-# Which resources to intercept
-resourceRules:
-  include:
-    - apiGroups: ["apps"]
-      resources: ["deployments", "replicasets"]
-    - apiGroups: ["example.com"]
-      resources: ["ekscluster", "nodepools"]
-
-# Namespaces to exclude
-excludeNamespaces:
-  - kube-system
-  - kube-public
-
-# Certificate management
-certificates:
-  certManager:
-    enabled: true
-    issuerRef:
-      name: letsencrypt-prod
-      kind: ClusterIssuer
-```
-
 ## Configuration
 
-### Resource Targeting
+Kausality uses Custom Resource Definitions (CRDs) to configure drift detection policies. This approach allows dynamic policy management without redeploying the webhook.
 
-Configure which resources are subject to drift detection via `resourceRules`:
+### Quick Start
+
+After installing Kausality, create a policy to enable drift detection:
 
 ```yaml
-resourceRules:
-  include:
-    # All resources in apps group
+apiVersion: kausality.io/v1alpha1
+kind: Kausality
+metadata:
+  name: apps-policy
+spec:
+  # Which resources to track
+  resources:
+    - apiGroups: ["apps"]
+      resources: ["deployments", "replicasets", "statefulsets"]
+  # Drift detection mode: log or enforce
+  mode: log
+```
+
+Apply the policy:
+
+```bash
+kubectl apply -f policy.yaml
+```
+
+### Kausality CRD
+
+The `Kausality` CRD defines which resources to monitor and how to handle drift.
+
+```yaml
+apiVersion: kausality.io/v1alpha1
+kind: Kausality
+metadata:
+  name: production-policy
+spec:
+  # Resources to track (required)
+  resources:
+    # Track all resources in apps group except DaemonSets
     - apiGroups: ["apps"]
       resources: ["*"]
-    # Specific custom resources
+      excluded: ["daemonsets"]
+    # Track specific custom resources
     - apiGroups: ["example.com"]
       resources: ["ekscluster", "nodepools"]
-  exclude:
-    # Skip ConfigMaps and Secrets
-    - apiGroups: [""]
-      resources: ["configmaps", "secrets"]
+
+  # Namespace filtering (optional)
+  # If omitted, all namespaces are tracked (except system namespaces)
+  namespaces:
+    # Explicit list of namespaces
+    names: ["production", "staging"]
+    # Or use label selector (mutually exclusive with names)
+    # selector:
+    #   matchLabels:
+    #     env: production
+    # Always excluded, even if matching above
+    excluded: ["kube-system"]
+
+  # Object label selector (optional)
+  # Only track objects matching these labels
+  objectSelector:
+    matchLabels:
+      managed-by: kausality
+
+  # Default mode: log or enforce
+  mode: log
+
+  # Per-resource/namespace mode overrides (optional)
+  # First match wins
+  overrides:
+    - namespaces: ["production"]
+      mode: enforce
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      namespaces: ["staging"]
+      mode: enforce
 ```
 
-### Namespace Exclusions
+### Policy Fields
 
-Exclude entire namespaces from drift detection:
+| Field | Description |
+|-------|-------------|
+| `resources` | List of API groups and resources to track. Use `"*"` for all resources in a group. |
+| `resources[].excluded` | Resources to exclude when using `"*"`. Only valid with wildcard. |
+| `namespaces.names` | Explicit namespace list. Mutually exclusive with `selector`. |
+| `namespaces.selector` | Label selector for namespaces. Mutually exclusive with `names`. |
+| `namespaces.excluded` | Namespaces to always skip, even if matching above. |
+| `objectSelector` | Only track objects matching these labels. |
+| `mode` | Default mode: `log` (detect and warn) or `enforce` (block drift). |
+| `overrides` | Fine-grained mode overrides by namespace/resource. First match wins. |
 
-```yaml
-excludeNamespaces:
-  - kube-system
-  - kube-public
-  - kube-node-lease
-```
-
-### Drift Detection Mode
-
-Configure whether drift is logged only or enforced (requests blocked).
-
-#### Global Default (Helm)
-
-Set the global default mode in values.yaml:
-
-```yaml
-driftDetection:
-  # Default mode for all resources: "log" or "enforce"
-  defaultMode: log
-```
-
-#### Runtime Configuration (Annotations)
-
-Override the mode at runtime using the `kausality.io/mode` annotation on namespaces or objects:
-
-```yaml
-# Enforce mode for an entire namespace
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: production
-  annotations:
-    kausality.io/mode: "enforce"
----
-# Log mode override for a specific object
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: experimental
-  namespace: production
-  annotations:
-    kausality.io/mode: "log"  # Override namespace's enforce mode
-```
-
-**Precedence (most specific wins):**
-1. Object annotation `kausality.io/mode`
-2. Namespace annotation `kausality.io/mode`
-3. Global default from Helm values (`defaultMode`)
+### Drift Detection Modes
 
 | Mode | Behavior |
 |------|----------|
@@ -244,6 +236,17 @@ metadata:
 | `enforce` | Drift without approval is denied with an error message |
 
 In `log` mode, drift warnings are returned via the admission response `warnings` field, which kubectl and other clients display to users.
+
+### Multiple Policies
+
+Multiple `Kausality` resources can coexist. When policies overlap, the most specific policy wins based on:
+1. Explicit namespace names over selectors
+2. Specific resource lists over wildcards
+3. Object selectors over no selectors
+
+### Helm Values
+
+See [charts/kausality/values.yaml](charts/kausality/values.yaml) for Helm configuration options (replicas, resources, certificates, etc.). Policy configuration is done via CRDs, not Helm values.
 
 ## Development
 
@@ -294,6 +297,8 @@ make test-verbose
 
 ```
 kausality/
+├── api/
+│   └── v1alpha1/                # CRD types (Kausality, annotations, trace)
 ├── cmd/
 │   ├── kausality-webhook/       # Webhook server binary
 │   ├── kausality-backend-log/   # Backend that logs DriftReports as YAML
@@ -303,20 +308,16 @@ kausality/
 │   ├── approval/                # Approval/rejection annotation handling
 │   ├── backend/                 # Backend server and TUI components
 │   ├── callback/                # Drift notification webhook callbacks
-│   │   ├── v1alpha1/            # DriftReport API types
-│   │   ├── sender.go            # HTTP client for webhook calls
-│   │   └── tracker.go           # ID tracking for deduplication
+│   │   └── v1alpha1/            # DriftReport API types
 │   ├── config/                  # Configuration types and loading
 │   ├── controller/              # Controller identification via user hash tracking
 │   ├── drift/                   # Core drift detection logic
-│   │   ├── types.go             # DriftResult, ParentState types
-│   │   ├── detector.go          # Main drift detection
-│   │   ├── resolver.go          # Parent object resolution
-│   │   └── lifecycle.go         # Lifecycle phase detection
+│   ├── policy/                  # Policy resolution from Kausality CRDs
 │   ├── trace/                   # Request trace propagation
 │   └── webhook/                 # Webhook server
 ├── charts/
 │   └── kausality/               # Helm chart
+│       └── crds/                # CRD manifests
 └── doc/
     └── design/                  # Design specification
 ```
@@ -325,11 +326,12 @@ kausality/
 
 **Design:**
 - [Design Overview](doc/design/INDEX.md) — Core concepts and quick reference
+- [Kausality CRD](doc/design/KAUSALITY_CRD.md) — Policy configuration, resource selection, precedence rules
 - [Drift Detection](doc/design/DRIFT_DETECTION.md) — Controller identification, annotation protection, lifecycle phases
 - [Approvals](doc/design/APPROVALS.md) — Approval/rejection annotations, modes, freeze/snooze
 - [Tracing](doc/design/TRACING.md) — Request trace propagation through controller hierarchy
 - [Callbacks](doc/design/CALLBACKS.md) — Drift notification webhooks, DriftReport API
-- [Deployment](doc/design/DEPLOYMENT.md) — Library vs webhook mode, Helm configuration
+- [Deployment](doc/design/DEPLOYMENT.md) — Webhook deployment, Helm configuration
 
 **Reference:**
 - [Architecture Decisions](doc/ADR.md) — Rationale, trade-offs, alternatives
@@ -360,7 +362,12 @@ kausality/
   - [x] Backend implementations (log, TUI)
   - [x] Helm chart integration
 
-- [ ] **Phase 5**: ApprovalPolicy CRD
+- [ ] **Phase 5**: Kausality CRD (in progress)
+  - [x] Kausality CRD for policy configuration
+  - [x] CEL validation rules
+  - [ ] Policy controller for webhook configuration
+  - [ ] E2E tests with CRD-based policies
+
 - [ ] **Phase 6**: Slack integration
 
 ## License
