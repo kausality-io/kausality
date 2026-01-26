@@ -18,7 +18,7 @@ const (
 // ResourceRule defines which resources to track within specific API groups.
 //
 // +kubebuilder:validation:XValidation:rule="self.apiGroups.all(g, g != '*')",message="apiGroups cannot contain '*', use explicit group names"
-// +kubebuilder:validation:XValidation:rule="size(self.excluded) == 0 || self.resources.exists(r, r == '*')",message="excluded can only be used when resources contains '*'"
+// +kubebuilder:validation:XValidation:rule="!has(self.excluded) || size(self.excluded) == 0 || self.resources.exists(r, r == '*')",message="excluded can only be used when resources contains '*'"
 type ResourceRule struct {
 	// APIGroups is the list of API groups. Required, no "*" allowed.
 	// Use "" for the core API group.

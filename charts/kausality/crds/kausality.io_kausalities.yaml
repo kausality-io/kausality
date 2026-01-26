@@ -260,8 +260,8 @@ spec:
                   - message: apiGroups cannot contain '*', use explicit group names
                     rule: self.apiGroups.all(g, g != '*')
                   - message: excluded can only be used when resources contains '*'
-                    rule: size(self.excluded) == 0 || self.resources.exists(r, r ==
-                      '*')
+                    rule: '!has(self.excluded) || size(self.excluded) == 0 || self.resources.exists(r,
+                      r == ''*'')'
                 maxItems: 20
                 minItems: 1
                 type: array

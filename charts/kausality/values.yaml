@@ -101,6 +101,37 @@ driftCallbacks: []
   # - url: https://backend2.example.com/webhook
   #   timeout: 5s
 
+# Controller deployment (reconciles Kausality CRDs, manages webhook configuration)
+controller:
+  enabled: true
+
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/kausality-io/kausality-controller
+    pullPolicy: IfNotPresent
+    tag: ""  # Defaults to appVersion
+
+  # Metrics bind address
+  metricsBindAddress: ":8080"
+  # Health probe bind address
+  healthProbeBindAddress: ":8081"
+  # Enable leader election for HA
+  leaderElect: false
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 10m
+      memory: 32Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Backend deployment for receiving drift reports
 # Deploys kausality-backend-log which logs DriftReports as YAML
 backend:

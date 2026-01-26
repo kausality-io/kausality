@@ -1,5 +1,8 @@
 # Helm values for local Tilt development
 
+controller:
+  enabled: true
+
 certificates:
   selfSigned:
     enabled: true

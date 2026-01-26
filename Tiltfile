@@ -14,6 +14,13 @@ ko_build(
     deps=['./cmd/kausality-webhook', './pkg'],
 )
 
+# Build the controller image with ko
+ko_build(
+    'kausality-controller',
+    './cmd/kausality-controller',
+    deps=['./cmd/kausality-controller', './pkg'],
+)
+
 # Build the backend-log image with ko
 ko_build(
     'kausality-backend-log',
@@ -31,6 +38,9 @@ k8s_yaml(helm(
         'image.repository=kausality-webhook',
         'image.tag=tilt',
         'image.pullPolicy=Never',
+        'controller.image.repository=kausality-controller',
+        'controller.image.tag=tilt',
+        'controller.image.pullPolicy=Never',
         'backend.image.repository=kausality-backend-log',
         'backend.image.tag=tilt',
         'backend.image.pullPolicy=Never',
@@ -50,6 +60,12 @@ k8s_resource(
     resource_deps=['create-namespace'],
     port_forwards=['8081:8081'],  # health endpoint
     labels=['webhook'],
+)
+
+k8s_resource(
+    'kausality-controller',
+    resource_deps=['create-namespace'],
+    labels=['controller'],
 )
 
 k8s_resource(

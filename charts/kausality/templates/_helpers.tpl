@@ -74,6 +74,41 @@ Create the certificate secret name
 {{- end }}
 
 {{/*
+Controller fullname
+*/}}
+{{- define "kausality.controllerFullname" -}}
+{{- printf "%s-controller" (include "kausality.fullname" .) }}
+{{- end }}
+
+{{/*
+Controller labels
+*/}}
+{{- define "kausality.controllerLabels" -}}
+helm.sh/chart: {{ include "kausality.chart" . }}
+{{ include "kausality.controllerSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Controller selector labels
+*/}}
+{{- define "kausality.controllerSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "kausality.name" . }}-controller
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: controller
+{{- end }}
+
+{{/*
+Controller service account name
+*/}}
+{{- define "kausality.controllerServiceAccountName" -}}
+{{- printf "%s-controller" (include "kausality.fullname" .) }}
+{{- end }}
+
+{{/*
 Backend fullname
 */}}
 {{- define "kausality.backendFullname" -}}
