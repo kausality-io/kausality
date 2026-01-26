@@ -21,6 +21,7 @@ Kausality detects when controllers make unexpected changes to child resources an
 | Document | Topics |
 |----------|--------|
 | [DRIFT_DETECTION.md](DRIFT_DETECTION.md) | Drift detection mechanism, controller identification, annotation protection, lifecycle phases |
+| [KAUSALITY_CRD.md](KAUSALITY_CRD.md) | Kausality CRD for dynamic policy configuration, resource selection, precedence rules |
 | [APPROVALS.md](APPROVALS.md) | Approval/rejection annotations, modes, enforcement, freeze/snooze, ApprovalPolicy CRD |
 | [TRACING.md](TRACING.md) | Request tracing, origin vs controller hop, trace labels |
 | [CALLBACKS.md](CALLBACKS.md) | Drift notification webhooks, DriftReport API, Slack escalation |
