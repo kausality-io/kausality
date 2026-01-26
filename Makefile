@@ -139,12 +139,11 @@ install-e2e: helm ## Install kausality for E2E tests. Requires WEBHOOK_IMAGE and
 		--set backend.image.pullPolicy=Never \
 		--set driftCallback.enabled=true \
 		--set certificates.selfSigned.enabled=true \
-		--set 'resourceRules.include[0].apiGroups={apps}' \
-		--set 'resourceRules.include[0].resources={deployments,replicasets}' \
 		--set logging.development=true \
 		--wait --timeout 180s
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality -n kausality-system --timeout=180s
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality-backend -n kausality-system --timeout=180s
+	kubectl apply -f test/e2e/kubernetes/kausality-policy.yaml
 
 .PHONY: install-e2e-crossplane
 install-e2e-crossplane: helm ## Install kausality for Crossplane E2E tests. Requires WEBHOOK_IMAGE and BACKEND_IMAGE.
@@ -161,17 +160,11 @@ install-e2e-crossplane: helm ## Install kausality for Crossplane E2E tests. Requ
 		--set backend.image.pullPolicy=Never \
 		--set driftCallback.enabled=true \
 		--set certificates.selfSigned.enabled=true \
-		--set 'resourceRules.include[0].apiGroups={nop.crossplane.io}' \
-		--set 'resourceRules.include[0].resources={*}' \
-		--set 'resourceRules.include[1].apiGroups={apps}' \
-		--set 'resourceRules.include[1].resources={deployments,replicasets}' \
-		--set 'resourceRules.include[2].apiGroups={test.kausality.io}' \
-		--set 'resourceRules.include[2].resources={*}' \
-		--set driftDetection.defaultMode=enforce \
 		--set logging.development=true \
 		--wait --timeout 300s
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality -n kausality-system --timeout=180s
 	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kausality-backend -n kausality-system --timeout=180s
+	kubectl apply -f test/e2e/crossplane/kausality-policy.yaml
 
 ##@ Deployment
 

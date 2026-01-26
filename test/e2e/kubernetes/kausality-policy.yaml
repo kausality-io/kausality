@@ -1,0 +1,11 @@
+# Kausality policy for Kubernetes E2E tests
+# Tracks apps resources (deployments, replicasets)
+apiVersion: kausality.io/v1alpha1
+kind: Kausality
+metadata:
+  name: apps
+spec:
+  mode: log
+  resources:
+    - apiGroups: ["apps"]
+      resources: ["deployments", "replicasets"]

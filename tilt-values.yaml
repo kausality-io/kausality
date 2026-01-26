@@ -10,23 +10,26 @@ backend:
 driftCallback:
   enabled: true
 
-# Monitor deployments, replicasets, and Crossplane resources for testing
-resourceRules:
-  include:
-    - apiGroups: ["apps"]
-      resources: ["deployments", "replicasets"]
-    # Crossplane resources for E2E tests
-    - apiGroups: ["nop.crossplane.io"]
-      resources: ["*"]
-    - apiGroups: ["test.kausality.io"]
-      resources: ["*"]
-
 # Exclude kausality-system from drift detection
 excludeNamespaces:
   - kube-system
   - kube-public
   - kube-node-lease
-  - kausality-system
 
 logging:
   development: true
+
+# Note: Resources to track are now configured via Kausality CRDs.
+# Create a Kausality resource after installation, e.g.:
+#
+# apiVersion: kausality.io/v1alpha1
+# kind: Kausality
+# metadata:
+#   name: default
+# spec:
+#   mode: log
+#   resources:
+#     - apiGroups: ["apps"]
+#       resources: ["deployments", "replicasets"]
+#     - apiGroups: ["nop.crossplane.io"]
+#       resources: ["*"]

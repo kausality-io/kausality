@@ -1,0 +1,13 @@
+# Kausality policy for Crossplane E2E tests
+# Tracks Crossplane and test resources (additive to apps policy)
+apiVersion: kausality.io/v1alpha1
+kind: Kausality
+metadata:
+  name: crossplane
+spec:
+  mode: enforce
+  resources:
+    - apiGroups: ["nop.crossplane.io"]
+      resources: ["*"]
+    - apiGroups: ["test.kausality.io"]
+      resources: ["*"]

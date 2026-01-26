@@ -5,11 +5,25 @@ metadata:
   labels:
     {{- include "kausality.labels" . | nindent 4 }}
 rules:
-  # Need to read any resource to resolve parent objects
+  # Read any resource to resolve parent objects
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
-  # Need to update resources for async controller annotation updates
+
+  # Update resources for controller annotation updates
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["update", "patch"]
+
+  # Manage Kausality CRDs (policy controller)
+  - apiGroups: ["kausality.io"]
+    resources: ["kausalities"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["kausality.io"]
+    resources: ["kausalities/status"]
+    verbs: ["get", "update", "patch"]
+
+  # Manage webhook configuration (policy controller)
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch", "update", "patch"]

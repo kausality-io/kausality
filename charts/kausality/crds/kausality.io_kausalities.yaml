@@ -71,11 +71,13 @@ spec:
                       match names or selector.
                     items:
                       type: string
+                    maxItems: 100
                     type: array
                   names:
                     description: Names is an explicit list of namespace names to include.
                     items:
                       type: string
+                    maxItems: 100
                     type: array
                   selector:
                     description: Selector matches namespaces by labels.
@@ -124,6 +126,9 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                 type: object
+                x-kubernetes-validations:
+                - message: names and selector are mutually exclusive
+                  rule: '!(size(self.names) > 0 && has(self.selector))'
               objectSelector:
                 description: |-
                   ObjectSelector filters objects by labels.
@@ -186,6 +191,7 @@ spec:
                         groups.
                       items:
                         type: string
+                      maxItems: 10
                       type: array
                     mode:
                       description: Mode is the drift detection mode for matching resources.
@@ -197,15 +203,23 @@ spec:
                       description: Namespaces limits this override to specific namespaces.
                       items:
                         type: string
+                      maxItems: 100
                       type: array
                     resources:
                       description: Resources limits this override to specific resources.
                       items:
                         type: string
+                      maxItems: 50
                       type: array
                   required:
                   - mode
                   type: object
+                  x-kubernetes-validations:
+                  - message: override must have at least one filter (apiGroups, resources,
+                      or namespaces)
+                    rule: size(self.apiGroups) > 0 || size(self.resources) > 0 ||
+                      size(self.namespaces) > 0
+                maxItems: 50
                 type: array
               resources:
                 description: Resources defines which resources to track.
@@ -219,6 +233,7 @@ spec:
                         Use "" for the core API group.
                       items:
                         type: string
+                      maxItems: 10
                       minItems: 1
                       type: array
                     excluded:
@@ -227,18 +242,27 @@ spec:
                         Only applies when Resources contains "*".
                       items:
                         type: string
+                      maxItems: 50
                       type: array
                     resources:
                       description: Resources is the list of resources. Use "*" to
                         match all resources in the group.
                       items:
                         type: string
+                      maxItems: 50
                       minItems: 1
                       type: array
                   required:
                   - apiGroups
                   - resources
                   type: object
+                  x-kubernetes-validations:
+                  - message: apiGroups cannot contain '*', use explicit group names
+                    rule: self.apiGroups.all(g, g != '*')
+                  - message: excluded can only be used when resources contains '*'
+                    rule: size(self.excluded) == 0 || self.resources.exists(r, r ==
+                      '*')
+                maxItems: 20
                 minItems: 1
                 type: array
             required:

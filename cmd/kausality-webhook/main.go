@@ -46,7 +46,7 @@ func main() {
 	flag.IntVar(&port, "port", 9443, "The port to listen on for webhook requests")
 	flag.StringVar(&certDir, "cert-dir", "/etc/webhook/certs", "The directory containing tls.crt and tls.key")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address for health probes")
-	flag.StringVar(&configFile, "config", "", "Path to config file (required)")
+	flag.StringVar(&configFile, "config", "", "Path to config file (optional, for drift callbacks)")
 
 	opts := zap.Options{
 		Development: true,
@@ -82,21 +82,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load config (required)
-	if configFile == "" {
-		log.Error(nil, "config file is required")
-		os.Exit(1)
+	// Load config (optional, for drift callbacks)
+	var driftConfig *config.Config
+	if configFile != "" {
+		var err error
+		driftConfig, err = config.Load(configFile)
+		if err != nil {
+			log.Error(err, "unable to load config file", "path", configFile)
+			os.Exit(1)
+		}
+		log.Info("loaded config",
+			"backends", len(driftConfig.Backends),
+		)
+	} else {
+		driftConfig = config.Default()
+		log.Info("using default config (no config file specified)")
 	}
-	driftConfig, err := config.Load(configFile)
-	if err != nil {
-		log.Error(err, "unable to load config file", "path", configFile)
-		os.Exit(1)
-	}
-	log.Info("loaded config",
-		"defaultMode", driftConfig.DriftDetection.DefaultMode,
-		"overrides", len(driftConfig.DriftDetection.Overrides),
-		"backends", len(driftConfig.Backends),
-	)
 
 	// Create multi-sender if backends are configured
 	var callbackSender callback.ReportSender

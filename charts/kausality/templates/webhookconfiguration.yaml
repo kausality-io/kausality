@@ -1,4 +1,6 @@
-{{- if and .Values.resourceRules.include (not .Values.certificates.selfSigned.enabled) }}
+{{- if not .Values.certificates.selfSigned.enabled }}
+# MutatingWebhookConfiguration managed by the Kausality policy controller.
+# Rules are populated dynamically based on Kausality CRD instances.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
@@ -23,35 +25,14 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /mutate
         port: {{ .Values.service.port }}
-    rules:
-      {{- range .Values.resourceRules.include }}
-      # Spec changes (CREATE, UPDATE, DELETE)
-      - apiGroups:
-          {{- toYaml .apiGroups | nindent 10 }}
-        apiVersions: ["*"]
-        resources:
-          {{- toYaml .resources | nindent 10 }}
-        operations:
-          - CREATE
-          - UPDATE
-          - DELETE
-        scope: "*"
-      # Status subresource (UPDATE only) - for controller identification
-      - apiGroups:
-          {{- toYaml .apiGroups | nindent 10 }}
-        apiVersions: ["*"]
-        resources:
-          {{- range .resources }}
-          - {{ . }}/status
-          {{- end }}
-        operations:
-          - UPDATE
-        scope: "*"
-      {{- end }}
+    rules: []  # Populated by policy controller based on Kausality CRDs
     namespaceSelector:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: NotIn
           values:
-            {{- toYaml .Values.excludeNamespaces | nindent 12 }}
+            - {{ .Release.Namespace }}
+            {{- range .Values.excludeNamespaces }}
+            - {{ . }}
+            {{- end }}
 {{- end }}
