@@ -12,6 +12,7 @@ import (
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,6 +20,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kausalityv1alpha1 "github.com/kausality-io/kausality/api/v1alpha1"
 )
@@ -424,7 +427,36 @@ func (c *Controller) setCondition(policy *kausalityv1alpha1.Kausality, condType 
 func (c *Controller) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kausalityv1alpha1.Kausality{}).
+		// Watch CRDs to re-expand wildcards when new resources are registered
+		Watches(&apiextensionsv1.CustomResourceDefinition{},
+			handler.EnqueueRequestsFromMapFunc(c.mapCRDToKausalityPolicies)).
 		Complete(c)
+}
+
+// mapCRDToKausalityPolicies returns all Kausality policies when a CRD changes.
+// This triggers re-reconciliation which re-expands wildcard resources.
+func (c *Controller) mapCRDToKausalityPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	var policies kausalityv1alpha1.KausalityList
+	if err := c.List(ctx, &policies); err != nil {
+		c.Log.Error(err, "failed to list Kausality policies for CRD watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, policy := range policies.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&policy),
+		})
+	}
+
+	if len(requests) > 0 {
+		crd, _ := obj.(*apiextensionsv1.CustomResourceDefinition)
+		if crd != nil {
+			c.Log.V(1).Info("CRD changed, requeueing policies", "crd", crd.Name, "policies", len(requests))
+		}
+	}
+
+	return requests
 }
 
 // reconcileClusterRole creates or updates a ClusterRole for the policy.
