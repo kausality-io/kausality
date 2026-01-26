@@ -461,3 +461,4 @@ tilt up                        # Auto-compile and deploy on code changes
 - Add comments only where the logic isn't self-evident
 - Preserve existing formatting unless changing semantics
 - Reading from a nil map returns zero value (no panic) - only initialize before writing
+- Wire context through function calls - only top-level functions (main, CLI commands) should use `context.Background()`; all other functions must accept and propagate context from callers
