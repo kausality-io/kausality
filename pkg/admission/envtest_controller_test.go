@@ -336,7 +336,7 @@ func TestRecordControllerAsync_AddsHashAfterDelay(t *testing.T) {
 			return false, fmt.Sprintf("controllers annotation is %q, waiting for %q", actual, expectedHash)
 		}
 		return true, "controller hash recorded"
-	}, 10*time.Second, 100*time.Millisecond, "controller hash should be recorded after delay")
+	}, ktesting.Timeout, ktesting.PollInterval, "controller hash should be recorded after delay")
 }
 
 // =============================================================================

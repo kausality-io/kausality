@@ -6,7 +6,6 @@ package admission_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,7 +159,7 @@ func TestWebhook_ControllerRecording_OnStatusUpdate(t *testing.T) {
 			return false, "controllers annotation is empty"
 		}
 		return true, "controllers annotation is set: " + controllers
-	}, 10*time.Second, 100*time.Millisecond, "controllers annotation should be set after status update")
+	}, ktesting.Timeout, ktesting.PollInterval, "controllers annotation should be set after status update")
 
 	afterStatusControllers := fetched.Annotations[controller.ControllersAnnotation]
 	t.Logf("Controllers after status update: %q", afterStatusControllers)

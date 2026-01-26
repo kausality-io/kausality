@@ -25,6 +25,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+const (
+	// Timeout is the default timeout for Eventually assertions in tests.
+	// Use for most test conditions that should resolve quickly.
+	Timeout = 10 * time.Second
+
+	// LongTimeout is for conditions that may take longer (e.g., controller reconciliation).
+	LongTimeout = 30 * time.Second
+
+	// PollInterval is the default polling interval for Eventually assertions.
+	PollInterval = 100 * time.Millisecond
+)
+
 // TestingT is the subset of testing.T used by these helpers.
 type TestingT interface {
 	Helper()

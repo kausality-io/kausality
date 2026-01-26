@@ -200,8 +200,8 @@ func TestEventualCondition(t *testing.T) {
             return client.Get(ctx, name, namespace)
         },
         ktesting.HasCondition("Ready", metav1.ConditionTrue),
-        30*time.Second,
-        100*time.Millisecond,
+        ktesting.LongTimeout,   // 30s for controller reconciliation
+        ktesting.PollInterval,  // 100ms
         "waiting for object to become ready",
     )
 }
@@ -426,10 +426,28 @@ Never commit test changes without running them first.
 
 ### Test Timing Rules
 
-1. **Never use `time.Sleep` in tests** - Use polling/waiting functions instead. The only exception is to prove something does NOT happen (wait then verify state unchanged).
-2. **30 seconds is a good upper bound** for waiting in integration or E2E tests.
-3. **100ms is a good poll interval** for eventually-style assertions.
-4. **Always use `retry.RetryOnConflict`** around resource update operations - Kubernetes updates can fail with conflicts due to concurrent modifications.
+1. **Never use `time.Sleep` in tests** - Use `ktesting.Eventually` for waiting on conditions:
+   ```go
+   ktesting.Eventually(t, func() (bool, string) {
+       // Check condition and return descriptive reason
+       if count.Load() != expected {
+           return false, fmt.Sprintf("count=%d, want %d", count.Load(), expected)
+       }
+       return true, "count matches"
+   }, ktesting.Timeout, ktesting.PollInterval, "waiting for count")
+   ```
+   **Standard duration constants in `pkg/testing`:**
+   - `ktesting.Timeout` = 10s - Default for most assertions
+   - `ktesting.LongTimeout` = 30s - For controller reconciliation
+   - `ktesting.PollInterval` = 100ms - Default poll interval
+
+   **Exceptions:**
+   - Inside test server handlers to simulate slow responses (not test code waiting)
+   - To prove something does NOT happen (sleep, then verify state unchanged)
+2. **Use standard constants** - Always use `ktesting.Timeout`, `ktesting.LongTimeout`, and `ktesting.PollInterval` instead of inline durations.
+3. **30 seconds is a good upper bound** for waiting in integration or E2E tests.
+4. **100ms is a good poll interval** for eventually-style assertions.
+5. **Always use `retry.RetryOnConflict`** around resource update operations - Kubernetes updates can fail with conflicts due to concurrent modifications.
 
 ### E2E Development Workflow
 
