@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 
@@ -47,6 +48,12 @@ const (
 
 	// PolicyNameLabel indicates which policy owns the ClusterRole.
 	PolicyNameLabel = "kausality.io/policy"
+
+	// DiscoveryResyncPeriod is how often policies are re-reconciled to pick up
+	// new CRDs that may have been registered after initial policy creation.
+	// This ensures wildcard resource rules ("*") eventually expand to include
+	// newly registered resources.
+	DiscoveryResyncPeriod = 5 * time.Minute
 )
 
 // Controller reconciles Kausality resources.
@@ -141,7 +148,9 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return requeueOnConflict(err)
 	}
 
-	return ctrl.Result{}, nil
+	// Requeue to periodically re-expand wildcard resources via discovery.
+	// This ensures new CRDs registered after policy creation are picked up.
+	return ctrl.Result{RequeueAfter: DiscoveryResyncPeriod}, nil
 }
 
 // requeueOnConflict returns a requeue result without error for conflict errors,
