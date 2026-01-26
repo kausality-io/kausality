@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kausality-io/kausality/pkg/controller"
@@ -81,24 +82,33 @@ func createDeployment(t *testing.T, ctx context.Context, namePrefix string) *app
 func markParentStable(t *testing.T, ctx context.Context, deploy *appsv1.Deployment) {
 	t.Helper()
 
-	// Set phase annotation
-	annotations := deploy.GetAnnotations()
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
-	annotations[controller.PhaseAnnotation] = controller.PhaseValueInitialized
-	deploy.SetAnnotations(annotations)
-	if err := k8sClient.Update(ctx, deploy); err != nil {
+	// Set phase annotation with retry
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+			return err
+		}
+		annotations := deploy.GetAnnotations()
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		annotations[controller.PhaseAnnotation] = controller.PhaseValueInitialized
+		deploy.SetAnnotations(annotations)
+		return k8sClient.Update(ctx, deploy)
+	})
+	if err != nil {
 		t.Fatalf("failed to update deployment annotations: %v", err)
 	}
 
-	// Re-fetch and set status
-	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
-		t.Fatalf("failed to get deployment: %v", err)
-	}
-	deploy.Status.ObservedGeneration = deploy.Generation
-	deploy.Status.Replicas = 1
-	if err := k8sClient.Status().Update(ctx, deploy); err != nil {
+	// Set status with retry
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(deploy), deploy); err != nil {
+			return err
+		}
+		deploy.Status.ObservedGeneration = deploy.Generation
+		deploy.Status.Replicas = 1
+		return k8sClient.Status().Update(ctx, deploy)
+	})
+	if err != nil {
 		t.Fatalf("failed to update deployment status: %v", err)
 	}
 
