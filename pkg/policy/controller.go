@@ -87,10 +87,7 @@ func (c *Controller) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Handle deletion
 	if !policy.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&policy, FinalizerName) {
-			// Delete the policy's ClusterRole
-			if err := c.deleteClusterRole(ctx, log, policy.Name); err != nil {
-				return ctrl.Result{}, err
-			}
+			// ClusterRole is cleaned up by Kubernetes GC via owner reference
 
 			// Reconcile webhook to remove this policy's rules
 			if err := c.reconcileWebhook(ctx, log); err != nil {
@@ -432,6 +429,14 @@ func (c *Controller) reconcileClusterRole(ctx context.Context, log logr.Logger, 
 				ManagedByLabel:   "kausality",
 				PolicyNameLabel:  policy.Name,
 			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: kausalityv1alpha1.GroupVersion.String(),
+					Kind:       "Kausality",
+					Name:       policy.Name,
+					UID:        policy.UID,
+				},
+			},
 		},
 		Rules: rules,
 	}
@@ -452,26 +457,6 @@ func (c *Controller) reconcileClusterRole(ctx context.Context, log logr.Logger, 
 		log.Info("updated ClusterRole", "name", roleName, "rules", len(rules))
 	}
 
-	return nil
-}
-
-// deleteClusterRole deletes the ClusterRole for a policy.
-func (c *Controller) deleteClusterRole(ctx context.Context, log logr.Logger, policyName string) error {
-	roleName := ClusterRolePrefix + policyName
-
-	var role rbacv1.ClusterRole
-	if err := c.Get(ctx, client.ObjectKey{Name: roleName}, &role); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to get ClusterRole: %w", err)
-	}
-
-	if err := c.Delete(ctx, &role); err != nil {
-		return fmt.Errorf("failed to delete ClusterRole: %w", err)
-	}
-
-	log.Info("deleted ClusterRole", "name", roleName)
 	return nil
 }
 
