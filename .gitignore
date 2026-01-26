@@ -1,6 +1,7 @@
 # Build artifacts
 bin/
 cover.out
+cmd/example-generic-control-plane/example-generic-control-plane
 
 # Environment
 .env
