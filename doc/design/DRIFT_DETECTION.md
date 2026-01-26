@@ -45,9 +45,11 @@ A key challenge is identifying whether a mutation comes from the controller (exp
 
 **Recording:**
 - Child CREATE/UPDATE (spec change only): user hash added to child's `updaters` annotation (sync, via patch)
-- Parent status UPDATE: user hash added to parent's `controllers` annotation (sync + async backup)
+- Parent status UPDATE: user hash added to parent's `controllers` annotation (sync, via direct API call)
 
 **Important:** Metadata-only changes (labels, annotations) do NOT record updaters. Only actual spec changes add the user to the updaters list. This ensures that users who only modify metadata are not incorrectly identified as controllers.
+
+**Why direct API call for controllers?** Kubernetes status subresource updates only modify `.status` - patches to metadata annotations are silently ignored. Therefore, controller hash recording must use a direct API call to update the parent's annotations.
 
 **Detection algorithm:**
 
