@@ -1,0 +1,6 @@
+# Build artifacts
+bin/
+cover.out
+
+# Environment
+.env
