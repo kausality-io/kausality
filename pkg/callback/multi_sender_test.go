@@ -99,14 +99,14 @@ func TestMultiSender_SendAsync_FansOut(t *testing.T) {
 	wg.Wait()
 
 	// Poll until all backends have received the report
-	require.Eventually(t, func() bool {
+	ktesting.Eventually(t, func() (bool, string) {
 		for i := 0; i < 3; i++ {
 			if counts[i].Load() != 1 {
-				return false
+				return false, fmt.Sprintf("count[%d]=%d, want 1", i, counts[i].Load())
 			}
 		}
-		return true
-	}, time.Second, 10*time.Millisecond, "all backends should receive 1 report")
+		return true, "all backends received"
+	}, ktesting.Timeout, ktesting.PollInterval, "all backends should receive 1 report")
 }
 
 func TestMultiSender_IsEnabled(t *testing.T) {
@@ -160,7 +160,7 @@ func TestMultiSender_MarkResolved(t *testing.T) {
 			return false, fmt.Sprintf("counts=[%d,%d], want [1,1]", c0, c1)
 		}
 		return true, "both received"
-	}, 5*time.Second, 10*time.Millisecond, "waiting for first send")
+	}, ktesting.Timeout, ktesting.PollInterval, "waiting for first send")
 
 	// Send again - should be deduplicated on both (counts stay at 1)
 	ms.SendAsync(context.Background(), report)
@@ -180,7 +180,7 @@ func TestMultiSender_MarkResolved(t *testing.T) {
 			return false, fmt.Sprintf("counts=[%d,%d], want [2,2]", c0, c1)
 		}
 		return true, "both received again"
-	}, 5*time.Second, 10*time.Millisecond, "waiting for resend")
+	}, ktesting.Timeout, ktesting.PollInterval, "waiting for resend")
 }
 
 func TestMultiSender_IndependentDeduplication(t *testing.T) {
@@ -221,7 +221,7 @@ func TestMultiSender_IndependentDeduplication(t *testing.T) {
 			return false, fmt.Sprintf("counts=[%d,%d], want [1,1]", c0, c1)
 		}
 		return true, "both received"
-	}, 5*time.Second, 10*time.Millisecond, "waiting for first send")
+	}, ktesting.Timeout, ktesting.PollInterval, "waiting for first send")
 
 	// Send again - neither should receive (independent dedup)
 	ms.SendAsync(context.Background(), report)
@@ -299,7 +299,7 @@ func TestMultiSender_ReportWithNewObject(t *testing.T) {
 			return false, fmt.Sprintf("received %d reports, want 1", len(receivedReports))
 		}
 		return true, "report received"
-	}, 5*time.Second, 10*time.Millisecond, "waiting for report")
+	}, ktesting.Timeout, ktesting.PollInterval, "waiting for report")
 
 	mu.Lock()
 	defer mu.Unlock()

@@ -562,7 +562,7 @@ func TestApprovalConsumed_ModeOnce(t *testing.T) {
 			}
 		}
 		return true, "approval consumed"
-	}, 5*time.Second, 50*time.Millisecond, "waiting for approval consumption")
+	}, ktesting.Timeout, ktesting.PollInterval, "waiting for approval consumption")
 }
 
 // =============================================================================

@@ -162,7 +162,7 @@ func TestCallback_DriftReportSentOnDetection(t *testing.T) {
 			return false, "no reports received yet"
 		}
 		return true, "callback received"
-	}, 5*time.Second, 50*time.Millisecond, "waiting for drift callback")
+	}, ktesting.Timeout, ktesting.PollInterval, "waiting for drift callback")
 
 	report := receivedReports[0]
 	t.Logf("Received drift report: phase=%s, id=%s", report.Spec.Phase, report.Spec.ID)
@@ -328,7 +328,7 @@ func TestCallback_ResolvedSentOnApproval(t *testing.T) {
 			return false, "no reports received yet"
 		}
 		return true, "callback received"
-	}, 5*time.Second, 50*time.Millisecond, "waiting for resolved callback")
+	}, ktesting.Timeout, ktesting.PollInterval, "waiting for resolved callback")
 
 	// Verify resolved report was sent
 	mu.Lock()
