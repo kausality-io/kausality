@@ -25,13 +25,10 @@ help: ## Display this help.
 
 ##@ Development
 
-.PHONY: manifests
-manifests: controller-gen ## Generate CRD manifests.
-	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=charts/kausality/crds
-
-.PHONY: generate
-generate: controller-gen ## Generate DeepCopy methods.
+.PHONY: gen
+gen: controller-gen ## Generate CRD manifests and DeepCopy methods.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=charts/kausality/crds
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.

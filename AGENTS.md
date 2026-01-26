@@ -5,11 +5,12 @@ This document provides guidance for working with code in this repository.
 ## Build and Test Commands
 
 ```bash
-make build          # Build webhook binary to bin/kausality-webhook
+make build          # Build binaries to bin/
 make test           # Run unit tests with coverage
 make envtest        # Run envtest integration tests (real API server)
 make lint           # Run golangci-lint
 make lint-fix       # Run golangci-lint with auto-fix
+make gen            # Generate CRD manifests and DeepCopy methods
 
 # Run a single test
 go test ./pkg/drift -run TestIsControllerByHash -v
@@ -21,6 +22,21 @@ go test ./pkg/admission -tags=envtest -run TestDriftDetection -v
 ## Architecture
 
 Kausality is an admission-based drift detection system for Kubernetes. It detects when controllers make unexpected changes to child resources.
+
+### Components
+
+| Component | Binary | ServiceAccount | Purpose |
+|-----------|--------|----------------|---------|
+| **Webhook** | `kausality-webhook` | `kausality-webhook` | Intercepts mutations and detects drift |
+| **Controller** | `kausality-controller` | `kausality-controller` | Watches Kausality CRDs, reconciles webhook config |
+
+**RBAC:**
+
+| ClusterRole | Bound To | Purpose |
+|-------------|----------|---------|
+| `kausality-webhook` | webhook | Read policies and namespaces |
+| `kausality-webhook-resources` | webhook | Aggregated access to tracked resources |
+| `kausality-controller` | controller | Manage CRDs, webhook config, per-policy ClusterRoles |
 
 ### Core Concept: Drift Detection
 
@@ -103,10 +119,14 @@ For detailed design documentation, see [doc/design/INDEX.md](doc/design/INDEX.md
   - `server.go` - HTTP server with in-memory drift store
   - `store.go` - Thread-safe drift report storage
 
+- **`pkg/policy/`** - Policy controller and store
+  - `controller.go` - Watches Kausality CRDs, reconciles webhook config and RBAC
+  - `store.go` - Policy cache with specificity-based precedence resolution
+
 - **`pkg/testing/`** - Test helpers
   - `eventually.go` - Eventually helpers with verbose YAML logging
 
-- **`pkg/webhook/`** - HTTP server for ValidatingAdmissionWebhook
+- **`pkg/webhook/`** - HTTP server for MutatingAdmissionWebhook
 
 ### Key Design Decisions
 
@@ -374,7 +394,10 @@ Example areas:
 - `admission`: Admission webhook handler
 - `approval`: Approval/rejection system
 - `config`: Configuration handling
+- `controller`: Policy controller
 - `drift`: Drift detection
+- `helm`: Helm chart changes
+- `policy`: Policy store and precedence
 - `trace`: Request trace propagation
 - `webhook`: Webhook server
 - `doc`: Documentation
