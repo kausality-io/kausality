@@ -49,11 +49,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Create the name of the service account to use
+Create the name of the webhook service account to use
 */}}
 {{- define "kausality.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "kausality.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "kausality.webhookFullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
