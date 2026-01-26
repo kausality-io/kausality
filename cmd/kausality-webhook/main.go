@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	kausalityv1alpha1 "github.com/kausality-io/kausality/api/v1alpha1"
 	"github.com/kausality-io/kausality/pkg/callback"
 	"github.com/kausality-io/kausality/pkg/config"
 	"github.com/kausality-io/kausality/pkg/webhook"
@@ -29,6 +30,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(kausalityv1alpha1.AddToScheme(scheme))
 }
 
 func main() {
