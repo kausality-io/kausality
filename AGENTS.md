@@ -41,8 +41,10 @@ The system identifies controllers by tracking which users update parent status v
 - Child: `kausality.io/updaters` - 5-char base36 hashes of user identifiers who update spec (max 5)
 
 **Recording:**
-- Child CREATE/UPDATE (spec): hash added to child's `updaters` annotation (sync, via patch)
+- Child CREATE/UPDATE (spec change only): hash added to child's `updaters` annotation (sync, via patch)
 - Parent status UPDATE: hash added to parent's `controllers` annotation (async, 5s delay, retry on conflict)
+
+Metadata-only changes do NOT record updaters - only spec changes do.
 
 **Detection logic:**
 ```
@@ -253,7 +255,16 @@ func TestFeature(t *testing.T) {
 
 ### Envtest Notes
 
-Envtests use a shared environment in `TestMain` for speed. When writing envtests:
+Envtests use a shared environment in `TestMain` for speed.
+
+```bash
+make envtest                    # Run all envtests (preferred)
+
+# Or run directly (setup-envtest is installed)
+source <(setup-envtest use -i -p env 1.34.x) && go test ./pkg/admission -tags=envtest -v
+```
+
+When writing envtests:
 - Use FQDN finalizers (e.g., `test.kausality.io/finalizer`)
 - Set `APIVersion` and `Kind` on objects before JSON marshaling (TypeMeta isn't populated by `client.Get`)
 
