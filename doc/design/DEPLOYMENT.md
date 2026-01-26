@@ -2,6 +2,25 @@
 
 The core logic is implemented as a **Go library** that can be consumed in two ways.
 
+## Architecture Overview
+
+When deployed as a webhook, Kausality consists of two components:
+
+| Component | Binary | ServiceAccount | Purpose |
+|-----------|--------|----------------|---------|
+| **Webhook** | `kausality-webhook` | `kausality-webhook` | Intercepts mutations and detects drift |
+| **Controller** | `kausality-controller` | `kausality-controller` | Watches Kausality CRDs, reconciles webhook configuration |
+
+**RBAC:**
+
+| ClusterRole | Bound To | Purpose |
+|-------------|----------|---------|
+| `kausality-webhook` | webhook | Read Kausality policies and namespaces for mode resolution |
+| `kausality-webhook-resources` | webhook | Aggregated access to tracked resources (auto-populated) |
+| `kausality-controller` | controller | Manage CRDs, webhook config, and per-policy ClusterRoles |
+
+The controller generates per-policy ClusterRoles (e.g., `kausality-policy-apps-policy`) with the aggregation label `kausality.io/aggregate-to-webhook-resources: "true"`. Kubernetes automatically aggregates these into `kausality-webhook-resources`, giving the webhook access to the resources defined in policies.
+
 ## Library Import (Generic Control Plane)
 
 ```go
@@ -71,44 +90,55 @@ resourceRules:
     exclude: true
 ```
 
-### Webhook Configuration (Helm)
+### Webhook Configuration (CRD-based)
 
-For stock Kubernetes, the Helm chart generates WebhookConfiguration:
+Resource targeting is configured via Kausality CRDs. The controller watches these CRDs and dynamically updates the MutatingWebhookConfiguration.
+
+```yaml
+apiVersion: kausality.io/v1alpha1
+kind: Kausality
+metadata:
+  name: apps-policy
+spec:
+  resources:
+    - apiGroups: ["apps"]
+      resources: ["deployments", "replicasets"]
+  mode: log
+```
+
+The controller reconciles this into webhook rules:
 
 ```yaml
 apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingWebhookConfiguration
+kind: MutatingWebhookConfiguration
 metadata:
-  name: kausality-drift-detection
+  name: kausality
 webhooks:
-- name: drift.kausality.io
+- name: mutating.webhook.kausality.io
   rules:
-  - apiGroups: ["apps", "example.com"]
+  - apiGroups: ["apps"]
     apiVersions: ["*"]
-    resources: ["deployments", "ekscluster", "nodepools"]
+    resources: ["deployments", "replicasets"]
     operations: ["CREATE", "UPDATE", "DELETE"]
-  namespaceSelector:
-    matchExpressions:
-    - key: kubernetes.io/metadata.name
-      operator: NotIn
-      values: ["kube-system", "kube-public"]
+  - apiGroups: ["apps"]
+    apiVersions: ["*"]
+    resources: ["deployments/status", "replicasets/status"]
+    operations: ["UPDATE"]  # For controller hash tracking
 ```
 
-Helm values:
-```yaml
-resourceRules:
-  include:
-  - apiGroups: ["apps"]
-    resources: ["*"]
-  - apiGroups: ["example.com"]
-    resources: ["ekscluster", "nodepools"]
-  exclude:
-  - apiGroups: [""]
-    resources: ["configmaps", "secrets"]
+The controller also generates per-policy ClusterRoles for RBAC:
 
-excludeNamespaces:
-  - kube-system
-  - kube-public
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kausality-policy-apps-policy
+  labels:
+    kausality.io/aggregate-to-webhook-resources: "true"
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "patch"]
 ```
 
 ### Library Configuration (Generic Control Plane)

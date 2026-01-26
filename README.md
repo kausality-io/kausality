@@ -298,9 +298,10 @@ make test-verbose
 ```
 kausality/
 ├── api/
-│   └── v1alpha1/                # CRD types (Kausality, annotations, trace)
+│   └── v1alpha1/                # CRD types (Kausality)
 ├── cmd/
-│   ├── kausality-webhook/       # Webhook server binary
+│   ├── kausality-webhook/       # Admission webhook server
+│   ├── kausality-controller/    # Policy controller (reconciles CRDs, manages webhook config)
 │   ├── kausality-backend-log/   # Backend that logs DriftReports as YAML
 │   └── kausality-backend-tui/   # Backend with interactive TUI
 ├── pkg/
@@ -312,7 +313,7 @@ kausality/
 │   ├── config/                  # Configuration types and loading
 │   ├── controller/              # Controller identification via user hash tracking
 │   ├── drift/                   # Core drift detection logic
-│   ├── policy/                  # Policy resolution from Kausality CRDs
+│   ├── policy/                  # Policy controller and store
 │   ├── trace/                   # Request trace propagation
 │   └── webhook/                 # Webhook server
 ├── charts/
@@ -321,6 +322,23 @@ kausality/
 └── doc/
     └── design/                  # Design specification
 ```
+
+### Architecture
+
+Kausality consists of two main components:
+
+| Component | Binary | Purpose |
+|-----------|--------|---------|
+| **Webhook** | `kausality-webhook` | Admission webhook that intercepts mutations and detects drift |
+| **Controller** | `kausality-controller` | Watches Kausality CRDs and reconciles webhook configuration |
+
+**RBAC:**
+
+| ClusterRole | Purpose |
+|-------------|---------|
+| `kausality-webhook` | Read Kausality policies and namespaces |
+| `kausality-webhook-resources` | Aggregated access to tracked resources (populated by controller) |
+| `kausality-controller` | Manage CRDs, webhook config, and per-policy ClusterRoles |
 
 ## Documentation
 
@@ -365,7 +383,8 @@ kausality/
 - [ ] **Phase 5**: Kausality CRD (in progress)
   - [x] Kausality CRD for policy configuration
   - [x] CEL validation rules
-  - [ ] Policy controller for webhook configuration
+  - [x] Policy controller for webhook configuration
+  - [x] Automatic RBAC generation (per-policy ClusterRoles with aggregation)
   - [ ] E2E tests with CRD-based policies
 
 - [ ] **Phase 6**: Slack integration
