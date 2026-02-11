@@ -51,17 +51,18 @@ func TestPropagator_isOrigin(t *testing.T) {
 			wantOrigin:    false,
 		},
 		{
-			name: "gen != obsGen, different actor - origin",
+			name: "gen != obsGen, different actor with parent controllers - origin",
 			parentState: &drift.ParentState{
 				Generation:         6,
 				ObservedGeneration: 5,
+				Controllers:        []string{controllerHash},
 			},
 			username:      otherUser,
-			childUpdaters: []string{controllerHash},
+			childUpdaters: []string{controllerHash, controller.HashUsername(otherUser)},
 			wantOrigin:    true,
 		},
 		{
-			name: "gen != obsGen, can't determine controller - hop (lenient)",
+			name: "gen != obsGen, different actor without parent controllers - hop (lenient)",
 			parentState: &drift.ParentState{
 				Generation:         6,
 				ObservedGeneration: 5,
