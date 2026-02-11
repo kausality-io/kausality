@@ -24,6 +24,7 @@ Kausality detects when controllers make unexpected changes to child resources an
 | [KAUSALITY_CRD.md](KAUSALITY_CRD.md) | Kausality CRD for dynamic policy configuration, resource selection, precedence rules |
 | [APPROVALS.md](APPROVALS.md) | Approval/rejection annotations, modes, enforcement, freeze/snooze, ApprovalPolicy CRD |
 | [TRACING.md](TRACING.md) | Request tracing, origin vs controller hop, trace labels |
+| [AUDIT_ANNOTATIONS.md](AUDIT_ANNOTATIONS.md) | Audit log annotations on webhook responses |
 | [CALLBACKS.md](CALLBACKS.md) | Drift notification webhooks, DriftReport API, Slack escalation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Library vs webhook deployment, resource targeting, Helm configuration |
 | [ADR.md](../ADR.md) | Architecture decisions, rationale, trade-offs, alternatives |
