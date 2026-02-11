@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -130,6 +131,9 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		}
 	}
 
+	// Audit annotations for the admission response audit event
+	audit := map[string]string{}
+
 	// Parse the object from the request
 	obj, err := h.parseObject(req)
 	if err != nil {
@@ -165,6 +169,12 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		return admission.Errored(http.StatusInternalServerError, fmt.Errorf("drift detection failed: %w", err))
 	}
 
+	// Record drift detection in audit annotations
+	audit[auditKeyDrift] = strconv.FormatBool(driftResult.DriftDetected)
+	if driftResult.LifecyclePhase != "" {
+		audit[auditKeyLifecyclePhase] = string(driftResult.LifecyclePhase)
+	}
+
 	// Log drift detection result
 	logFields := []interface{}{
 		"driftDetected", driftResult.DriftDetected,
@@ -183,7 +193,8 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		if frozen, freeze := h.checkFreeze(ctx, driftResult.ParentRef, obj.GetNamespace(), log); frozen {
 			freezeMsg := fmt.Sprintf("mutation blocked: parent %s", freeze.String())
 			log.Info("MUTATION FROZEN", append(logFields, "freezeUser", freeze.User, "freezeMessage", freeze.Message)...)
-			return admission.Denied(freezeMsg)
+			audit[auditKeyDecision] = "denied"
+			return withAuditAnnotations(admission.Denied(freezeMsg), audit)
 		}
 	}
 
@@ -237,6 +248,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 	driftMode := h.resolveMode(gvk, obj.GetNamespace(), resourceCtx.NamespaceLabels, obj.GetLabels(), objAnnotations, nsAnnotations)
 	enforceMode := driftMode == string(kausalityv1alpha1.ModeEnforce)
+	audit[auditKeyMode] = driftMode
 
 	if driftResult.DriftDetected {
 		// Check for approvals when drift is detected
@@ -250,12 +262,15 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		if approvalResult.Rejected {
 			rejectMsg := fmt.Sprintf("drift rejected: %s", approvalResult.Reason)
 			log.Info("DRIFT REJECTED", append(logFields, "rejectReason", approvalResult.Reason)...)
+			audit[auditKeyDriftResolution] = "rejected"
 			if enforceMode {
-				return admission.Denied(rejectMsg)
+				audit[auditKeyDecision] = "denied"
+				return withAuditAnnotations(admission.Denied(rejectMsg), audit)
 			}
 			// Non-enforce mode: add warning but allow
 			warnings = append(warnings, fmt.Sprintf("[kausality] %s (would be blocked in enforce mode)", rejectMsg))
 		} else if approvalResult.Approved {
+			audit[auditKeyDriftResolution] = "approved"
 			log.Info("DRIFT APPROVED", append(logFields, "approvalReason", approvalResult.Reason)...)
 			// Consume mode=once approvals and prune stale ones
 			h.consumeApproval(ctx, approvalResult, log)
@@ -264,10 +279,12 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		} else {
 			driftMsg := "drift detected: no approval found for this mutation"
 			log.Info("DRIFT DETECTED - no approval found", logFields...)
+			audit[auditKeyDriftResolution] = "unresolved"
 			// Send drift detected notification
 			h.sendDriftCallback(ctx, req, obj, driftResult, approvalResult.parent, v1alpha1.DriftReportPhaseDetected, log)
 			if enforceMode {
-				return admission.Denied(driftMsg)
+				audit[auditKeyDecision] = "denied"
+				return withAuditAnnotations(admission.Denied(driftMsg), audit)
 			}
 			// Non-enforce mode: add warning but allow
 			warnings = append(warnings, fmt.Sprintf("[kausality] %s (would be blocked in enforce mode)", driftMsg))
@@ -281,7 +298,8 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	if err != nil {
 		log.Error(err, "trace propagation failed")
 		// Don't fail the request on trace errors - just log and continue
-		return withWarnings(admission.Allowed(driftResult.Reason), warnings)
+		audit[auditKeyDecision] = auditDecision(warnings)
+		return withAuditAnnotations(withWarnings(admission.Allowed(driftResult.Reason), warnings), audit)
 	}
 
 	// Log trace info
@@ -294,7 +312,9 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	// For DELETE, we can't patch (no new object), just allow after logging
 	if req.Operation == admissionv1.Delete {
 		log.V(1).Info("delete operation traced", "trace", traceResult.Trace.String())
-		return withWarnings(admission.Allowed(driftResult.Reason), warnings)
+		audit[auditKeyTrace] = traceResult.Trace.String()
+		audit[auditKeyDecision] = auditDecision(warnings)
+		return withAuditAnnotations(withWarnings(admission.Allowed(driftResult.Reason), warnings), audit)
 	}
 
 	// Build annotations with trace and updater
@@ -361,6 +381,8 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 
 	// Build response manually to ensure patch is serialized correctly
 	patchType := admissionv1.PatchTypeJSONPatch
+	audit[auditKeyTrace] = newTrace
+	audit[auditKeyDecision] = auditDecision(warnings)
 	resp := admission.Response{
 		Patches: patches,
 		AdmissionResponse: admissionv1.AdmissionResponse{
@@ -369,7 +391,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		},
 	}
 
-	return withWarnings(resp, warnings)
+	return withAuditAnnotations(withWarnings(resp, warnings), audit)
 }
 
 // handleStatusUpdate handles status subresource updates to record controller identity.

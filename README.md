@@ -286,6 +286,31 @@ Initialization is detected via:
 - `Initialized=True` or `Ready=True` conditions
 - `observedGeneration` matching `generation`
 
+### Audit Annotations
+
+Kausality attaches metadata to the Kubernetes audit log via [admission response audit annotations](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#response). These appear in audit events, not on the object itself.
+
+| Annotation | Example | Description |
+|------------|---------|-------------|
+| `kausality.io/decision` | `allowed`, `denied`, `allowed-with-warning` | The webhook's decision |
+| `kausality.io/drift` | `true`, `false` | Whether drift was detected |
+| `kausality.io/mode` | `log`, `enforce` | Which mode applied |
+| `kausality.io/lifecycle-phase` | `Initializing`, `Initialized`, `Deleting` | Resource lifecycle phase |
+| `kausality.io/drift-resolution` | `approved`, `rejected`, `unresolved` | How drift was handled (only when drift detected) |
+| `kausality.io/trace` | `[{"apiVersion":"apps/v1",...}]` | Full causal trace as JSON |
+
+Query drift events from audit log files:
+
+```bash
+# Find all drift events in the audit log
+jq 'select(.annotations["kausality.io/drift"]=="true")' /var/log/kubernetes/audit.log
+
+# Find denied mutations
+jq 'select(.annotations["kausality.io/decision"]=="denied")' /var/log/kubernetes/audit.log
+```
+
+See [Audit Annotations design doc](doc/design/AUDIT_ANNOTATIONS.md) for details.
+
 ### Trace Labels
 
 Attach metadata to trace entries for correlation:
@@ -363,6 +388,7 @@ See [`cmd/example-generic-control-plane/`](cmd/example-generic-control-plane/) f
 
 **Reference:**
 - [Kausality CRD](doc/design/KAUSALITY_CRD.md) — Full CRD specification
+- [Audit Annotations](doc/design/AUDIT_ANNOTATIONS.md) — Audit log annotations on webhook responses
 - [Callbacks](doc/design/CALLBACKS.md) — DriftReport API for integrations
 - [Architecture Decisions](doc/ADR.md) — Design rationale and trade-offs
 
