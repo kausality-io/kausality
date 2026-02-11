@@ -1,0 +1,1 @@
+{"version":1,"timestamp":"2026-02-11T11:00:00Z","prompt":"Fix all review issues from self-review. Add tests for audit annotations. Address issue 1 (inconsistent audit annotation application on main return path) and issue 2 (misleading kubectl audit log example in README). Also fix fmt.Sprintf to strconv.FormatBool and wasted map allocation."}
