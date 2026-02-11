@@ -299,12 +299,14 @@ Kausality attaches metadata to the Kubernetes audit log via [admission response 
 | `kausality.io/drift-resolution` | `approved`, `rejected`, `unresolved` | How drift was handled (only when drift detected) |
 | `kausality.io/trace` | `[{"apiVersion":"apps/v1",...}]` | Full causal trace as JSON |
 
-Query drift events from audit logs:
+Query drift events from audit log files:
 
 ```bash
-# Find all denied drift events
-kubectl get --raw "/apis/audit.k8s.io/v1/events" | \
-  jq '.items[] | select(.annotations["kausality.io/drift"]=="true")'
+# Find all drift events in the audit log
+jq 'select(.annotations["kausality.io/drift"]=="true")' /var/log/kubernetes/audit.log
+
+# Find denied mutations
+jq 'select(.annotations["kausality.io/decision"]=="denied")' /var/log/kubernetes/audit.log
 ```
 
 See [Audit Annotations design doc](doc/design/AUDIT_ANNOTATIONS.md) for details.

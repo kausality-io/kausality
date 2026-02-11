@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -103,9 +104,6 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 		return h.handleStatusUpdate(ctx, req, log)
 	}
 
-	// Audit annotations for the admission response audit event
-	audit := map[string]string{}
-
 	// For UPDATE, check if spec changed - ignore status/metadata-only changes
 	// DELETE always traces (sets deletionTimestamp, which is significant even though it's metadata)
 	if req.Operation == admissionv1.Update {
@@ -132,6 +130,9 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 			return admission.Allowed("no spec change")
 		}
 	}
+
+	// Audit annotations for the admission response audit event
+	audit := map[string]string{}
 
 	// Parse the object from the request
 	obj, err := h.parseObject(req)
@@ -164,7 +165,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	}
 
 	// Record drift detection in audit annotations
-	audit[auditKeyDrift] = fmt.Sprintf("%t", driftResult.DriftDetected)
+	audit[auditKeyDrift] = strconv.FormatBool(driftResult.DriftDetected)
 	if driftResult.LifecyclePhase != "" {
 		audit[auditKeyLifecyclePhase] = string(driftResult.LifecyclePhase)
 	}
@@ -380,13 +381,12 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	resp := admission.Response{
 		Patches: patches,
 		AdmissionResponse: admissionv1.AdmissionResponse{
-			Allowed:          true,
-			PatchType:        &patchType,
-			AuditAnnotations: audit,
+			Allowed:   true,
+			PatchType: &patchType,
 		},
 	}
 
-	return withWarnings(resp, warnings)
+	return withAuditAnnotations(withWarnings(resp, warnings), audit)
 }
 
 // handleStatusUpdate handles status subresource updates to record controller identity.
