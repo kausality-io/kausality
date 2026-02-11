@@ -153,6 +153,11 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	userHash := controller.HashUsername(userID)
 	log = log.WithValues("userHash", userHash)
 
+	// Include current user in childUpdaters (they are mutating the child's spec or deleting it)
+	if !controller.ContainsHash(childUpdaters, userHash) {
+		childUpdaters = append(childUpdaters, userHash)
+	}
+
 	// Detect drift using user hash tracking
 	driftResult, err := h.detector.Detect(ctx, obj, userID, childUpdaters)
 	if err != nil {

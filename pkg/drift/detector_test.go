@@ -230,6 +230,17 @@ func TestIsControllerByHash(t *testing.T) {
 			wantCanDetermine: true,
 		},
 		{
+			name: "direct user mutation with parent controllers - not controller",
+			parentState: &ParentState{
+				Ref:         ParentRef{Kind: "EKSCluster", Name: "test"},
+				Controllers: []string{hash1}, // controller SA
+			},
+			username:         user2,                  // human user
+			childUpdaters:    []string{hash1, hash2}, // handler pre-added user2
+			wantController:   false,
+			wantCanDetermine: true,
+		},
+		{
 			name: "multiple updaters no parent controllers - can't determine",
 			parentState: &ParentState{
 				Ref:         ParentRef{Kind: "Deployment", Name: "test"},
