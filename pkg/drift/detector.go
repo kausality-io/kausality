@@ -125,26 +125,31 @@ func (d *Detector) Detect(ctx context.Context, obj client.Object, username strin
 func IsControllerByHash(parentState *ParentState, username string, childUpdaters []string) (bool, bool) {
 	userHash := controller.HashUsername(username)
 
-	// Case 1: Single updater on child - that's the controller
+	// When parent has controllers annotation, cross-validate
+	if len(parentState.Controllers) > 0 {
+		if len(childUpdaters) > 0 {
+			intersection := controller.Intersect(childUpdaters, parentState.Controllers)
+			if len(intersection) > 0 {
+				return controller.ContainsHash(intersection, userHash), true
+			}
+
+			// No intersection: child updaters are all non-controllers
+			return controller.ContainsHash(parentState.Controllers, userHash), true
+		}
+
+		// No child updaters (CREATE): check parent controllers directly
+		return controller.ContainsHash(parentState.Controllers, userHash), true
+	}
+
+	// No parent controllers: fall back to child updaters heuristic
 	if len(childUpdaters) == 1 {
 		return userHash == childUpdaters[0], true
 	}
-
-	// Case 2: Multiple updaters + parent has controllers - use intersection
-	if len(childUpdaters) > 1 && len(parentState.Controllers) > 0 {
-		intersection := controller.Intersect(childUpdaters, parentState.Controllers)
-		if len(intersection) > 0 {
-			return controller.ContainsHash(intersection, userHash), true
-		}
-	}
-
-	// Case 3: No updaters yet (CREATE) - current user is the first/only updater
 	if len(childUpdaters) == 0 {
-		// This is a CREATE - the current user will be the only updater
 		return true, true
 	}
 
-	// Case 4: Can't determine (multiple updaters, no parent controllers)
+	// Can't determine (multiple updaters, no parent controllers)
 	return false, false
 }
 

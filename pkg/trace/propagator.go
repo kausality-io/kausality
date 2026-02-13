@@ -101,28 +101,34 @@ func (p *Propagator) Propagate(ctx context.Context, obj client.Object, user stri
 // isOrigin determines if this mutation starts a new trace.
 // Origin conditions:
 // - No controller ownerReference
-// - Parent has generation == observedGeneration (not reconciling)
 // - Request is from a different actor (not the controller)
+// - Parent has generation == observedGeneration (not reconciling)
+// - Parent has no observedGeneration and user is not confirmed as controller
 func (p *Propagator) isOrigin(parentState *drift.ParentState, username string, childUpdaters []string) bool {
-	// No parent = origin
 	if parentState == nil {
 		return true
 	}
 
-	// Parent not reconciling (gen == obsGen) = origin (drift case)
-	if parentState.Generation == parentState.ObservedGeneration {
-		return true
-	}
-
-	// Check if request is from the controller using user hash tracking
+	// Check controller identity first
 	isController, canDetermine := drift.IsControllerByHash(parentState, username, childUpdaters)
 	if canDetermine && !isController {
-		// Different actor = origin (even if parent is reconciling)
-		return true
+		return true // different actor = always origin
 	}
 
-	// Controller is reconciling (or can't determine) = hop (extend parent trace)
-	return false
+	// If parent has observedGeneration, use it
+	if parentState.HasObservedGeneration {
+		if parentState.Generation == parentState.ObservedGeneration {
+			return true // parent stable = origin
+		}
+		return false // parent reconciling, user is/might be controller = extend
+	}
+
+	// No observedGeneration: can't determine reconciliation state.
+	// Only extend if user is confirmed as the controller.
+	if canDetermine && isController {
+		return false // confirmed controller = extend
+	}
+	return true // unknown = origin (safer default)
 }
 
 // getParentTrace retrieves the trace from the parent object.
