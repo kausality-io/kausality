@@ -165,7 +165,7 @@ Kausality distinguishes between:
 
 Kausality tracks who updates what:
 
-1. **Parent status updates** → records the controller's identity
+1. **Parent status updates** → records the controller's identity and synthesizes `observedGeneration` for parents that lack native `status.observedGeneration`
 2. **Child spec updates** → checks if this is the same controller
 3. **Stable parent** (`generation == observedGeneration`) + **controller update** = **drift**
 
@@ -284,7 +284,7 @@ Kausality handles resource lifecycle:
 Initialization is detected via:
 - `kausality.io/phase: initialized` annotation
 - `Initialized=True` or `Ready=True` conditions
-- `observedGeneration` matching `generation`
+- `observedGeneration` matching `generation` (native, condition-based, or synthetic `kausality.io/observedGeneration` annotation)
 
 ### Audit Annotations
 

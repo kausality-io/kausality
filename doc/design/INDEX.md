@@ -43,6 +43,7 @@ Kausality detects when controllers make unexpected changes to child resources an
 | `kausality.io/rejections` | Explicitly blocked mutations |
 | `kausality.io/freeze` | Emergency lockdown (blocks ALL changes) |
 | `kausality.io/snooze` | Suppress drift callbacks until expiry |
+| `kausality.io/observedGeneration` | Synthetic observedGeneration (from status updates) |
 | `kausality.io/mode` | `log` or `enforce` |
 
 ### Admission Flow Summary

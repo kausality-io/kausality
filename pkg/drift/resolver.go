@@ -3,6 +3,7 @@ package drift
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -100,6 +101,16 @@ func extractParentState(parent *unstructured.Unstructured, ownerRef metav1.Owner
 
 	// Check annotations
 	if annotations := parent.GetAnnotations(); annotations != nil {
+		// Fallback: kausality.io/observedGeneration annotation (synthetic observedGeneration)
+		if !state.HasObservedGeneration {
+			if obsGenStr, ok := annotations[controller.ObservedGenerationAnnotation]; ok {
+				if obsGen, err := strconv.ParseInt(obsGenStr, 10, 64); err == nil {
+					state.ObservedGeneration = obsGen
+					state.HasObservedGeneration = true
+				}
+			}
+		}
+
 		// Read phase annotation
 		state.PhaseFromAnnotation = annotations[controller.PhaseAnnotation]
 		if state.PhaseFromAnnotation == controller.PhaseValueInitialized {

@@ -21,9 +21,10 @@ import (
 
 // Annotation keys - re-exported from api/v1alpha1.
 const (
-	ControllersAnnotation = v1alpha1.ControllersAnnotation
-	UpdatersAnnotation    = v1alpha1.UpdatersAnnotation
-	MaxHashes             = v1alpha1.MaxHashes
+	ControllersAnnotation        = v1alpha1.ControllersAnnotation
+	UpdatersAnnotation           = v1alpha1.UpdatersAnnotation
+	ObservedGenerationAnnotation = v1alpha1.ObservedGenerationAnnotation
+	MaxHashes                    = v1alpha1.MaxHashes
 )
 
 const (
@@ -39,16 +40,18 @@ type Tracker struct {
 	log    logr.Logger
 
 	// pending tracks async updates to batch
-	pending   map[string]string // objectKey -> hash to add
-	pendingMu sync.Mutex
+	pending    map[string]string // objectKey -> hash to add
+	pendingGen map[string]int64  // objectKey -> observed generation
+	pendingMu  sync.Mutex
 }
 
 // NewTracker creates a new controller Tracker.
 func NewTracker(c client.Client, log logr.Logger) *Tracker {
 	return &Tracker{
-		client:  c,
-		log:     log.WithName("controller-tracker"),
-		pending: make(map[string]string),
+		client:     c,
+		log:        log.WithName("controller-tracker"),
+		pending:    make(map[string]string),
+		pendingGen: make(map[string]int64),
 	}
 }
 
@@ -101,23 +104,28 @@ func RecordUpdater(obj client.Object, username string) map[string]string {
 }
 
 // RecordControllerAsync schedules an async update to add the user hash
-// to the parent's controllers annotation.
+// to the parent's controllers annotation and record the observed generation.
 func (t *Tracker) RecordControllerAsync(ctx context.Context, obj client.Object, username string) {
 	hash := HashUsername(username)
 	key := objectKey(obj)
+	generation := obj.GetGeneration()
 
-	// Check if hash is already in annotation
+	// Check if hash is already in annotation AND generation annotation matches.
+	// Both must match to skip — generation changes on every spec update even
+	// when the controller hash is already recorded.
 	annotations := obj.GetAnnotations()
 	if annotations != nil {
 		existing := annotations[ControllersAnnotation]
-		if ContainsHash(ParseHashes(existing), hash) {
-			return // Already recorded
+		existingGen := annotations[ObservedGenerationAnnotation]
+		if ContainsHash(ParseHashes(existing), hash) && existingGen == strconv.FormatInt(generation, 10) {
+			return // Already recorded with current generation
 		}
 	}
 
 	t.pendingMu.Lock()
 	_, alreadyPending := t.pending[key]
 	t.pending[key] = hash
+	t.pendingGen[key] = generation
 	t.pendingMu.Unlock()
 
 	if !alreadyPending {
@@ -133,25 +141,29 @@ func (t *Tracker) RecordControllerAsync(ctx context.Context, obj client.Object, 
 	}
 }
 
-// flushAfterDelay waits and then updates the annotation.
+// flushAfterDelay waits and then updates the controller hash and observed generation annotations.
 func (t *Tracker) flushAfterDelay(ctx context.Context, obj client.Object, delay time.Duration) {
 	time.Sleep(delay)
 
 	key := objectKey(obj)
 	t.pendingMu.Lock()
 	hash, ok := t.pending[key]
+	generation := t.pendingGen[key]
 	delete(t.pending, key)
+	delete(t.pendingGen, key)
 	t.pendingMu.Unlock()
 
 	if !ok {
 		return
 	}
 
+	genStr := strconv.FormatInt(generation, 10)
 	log := t.log.WithValues(
 		"kind", objectTypeName(obj),
 		"namespace", obj.GetNamespace(),
 		"name", obj.GetName(),
 		"hash", hash,
+		"observedGeneration", generation,
 	)
 
 	// DeepCopy once, reuse in retry loop
@@ -162,26 +174,32 @@ func (t *Tracker) flushAfterDelay(ctx context.Context, obj client.Object, delay 
 			return err
 		}
 
-		// Get existing hashes
 		annotations := current.GetAnnotations()
 		hashes := ParseHashes(annotations[ControllersAnnotation])
+		hashPresent := ContainsHash(hashes, hash)
+		genMatches := annotations[ObservedGenerationAnnotation] == genStr
 
-		// Check if already present
-		if ContainsHash(hashes, hash) {
+		// Skip if both hash and generation are already up-to-date
+		if hashPresent && genMatches {
 			return nil
-		}
-
-		// Add new hash
-		hashes = append(hashes, hash)
-		if len(hashes) > MaxHashes {
-			hashes = hashes[len(hashes)-MaxHashes:]
 		}
 
 		// Initialize map only before writing
 		if annotations == nil {
 			annotations = make(map[string]string)
 		}
-		annotations[ControllersAnnotation] = strings.Join(hashes, ",")
+
+		// Add controller hash if not present
+		if !hashPresent {
+			hashes = append(hashes, hash)
+			if len(hashes) > MaxHashes {
+				hashes = hashes[len(hashes)-MaxHashes:]
+			}
+			annotations[ControllersAnnotation] = strings.Join(hashes, ",")
+		}
+
+		// Update observed generation annotation
+		annotations[ObservedGenerationAnnotation] = genStr
 		current.SetAnnotations(annotations)
 
 		return t.client.Update(ctx, current)
@@ -190,7 +208,7 @@ func (t *Tracker) flushAfterDelay(ctx context.Context, obj client.Object, delay 
 	if err != nil {
 		log.Error(err, "failed to update controllers annotation")
 	} else {
-		log.V(1).Info("recorded controller hash")
+		log.V(1).Info("recorded controller hash and observed generation")
 	}
 }
 

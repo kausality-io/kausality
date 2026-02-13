@@ -45,7 +45,7 @@ A key challenge is identifying whether a mutation comes from the controller (exp
 
 **Recording:**
 - Child CREATE/UPDATE (spec change only): user hash added to child's `updaters` annotation (sync, via patch)
-- Parent status UPDATE: user hash added to parent's `controllers` annotation (sync, via direct API call)
+- Parent status UPDATE: user hash added to parent's `controllers` annotation (sync, via direct API call), plus `kausality.io/observedGeneration` set to `obj.GetGeneration()` (synthetic observedGeneration for parents without native `status.observedGeneration`)
 
 **Important:** Metadata-only changes (labels, annotations) do NOT record updaters. Only actual spec changes add the user to the updaters list. This ensures that users who only modify metadata are not incorrectly identified as controllers.
 
@@ -91,7 +91,7 @@ Kubernetes controllers (e.g., deployment-controller) copy annotations from paren
 **Solution:** Three compute functions handle annotations for different update types.
 
 **Annotation categories:**
-- **System annotations** (`trace`, `updaters`, `controllers`): Special handling based on context
+- **System annotations** (`trace`, `updaters`, `controllers`, `observedGeneration`): Special handling based on context
 - **User annotations** (`approvals`, `rejections`, `freeze`, `snooze`, `trace-*`): Always preserved from OldObject on controller updates
 
 **Compute functions:**
@@ -121,6 +121,21 @@ Kubernetes controllers (e.g., deployment-controller) copy annotations from paren
 **For Terraform (L0 controllers)**:
 - Check if plan is non-empty when generation == observedGeneration
 - Use drift notification webhooks for plan review workflows
+
+## Synthetic observedGeneration
+
+**Problem:** Some parents (e.g., CAPI Clusters) lack `status.observedGeneration`. Without it, kausality can't tell if the parent is reconciling or stable, so it defaults to treating the change as a new origin rather than drift.
+
+**Observation:** When a controller updates status, it has necessarily "observed" the current generation.
+
+**Solution:** Record `obj.GetGeneration()` as `kausality.io/observedGeneration` on each status update. This annotation serves as a third fallback when determining the parent's reconciliation state.
+
+**Recording:** Written via direct API call (same as `kausality.io/controllers`) because status subresource patches to metadata don't persist in Kubernetes. Also set best-effort via the admission response patch.
+
+**Precedence:**
+1. `status.observedGeneration` (native)
+2. Condition `observedGeneration` (Crossplane-style, from Synced/Ready conditions)
+3. `kausality.io/observedGeneration` annotation (synthetic)
 
 ## Lifecycle Phases
 

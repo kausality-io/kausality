@@ -339,59 +339,66 @@ func TestComputeAnnotationsForUser(t *testing.T) {
 
 func TestComputeAnnotationsForStatusUpdate(t *testing.T) {
 	tests := []struct {
-		name     string
-		old      map[string]string
-		new      map[string]string
-		userHash string
-		want     map[string]string
+		name       string
+		old        map[string]string
+		new        map[string]string
+		userHash   string
+		generation int64
+		want       map[string]string
 	}{
 		{
-			name:     "preserve all kausality annotations and add controller hash",
-			old:      map[string]string{"kausality.io/trace": "old-trace", "kausality.io/updaters": "abc12", "kausality.io/controllers": "def34"},
-			new:      map[string]string{"kausality.io/trace": "stale", "kausality.io/updaters": "stale"},
-			userHash: "new12",
-			want:     map[string]string{"kausality.io/trace": "old-trace", "kausality.io/updaters": "abc12", "kausality.io/controllers": "def34,new12"},
+			name:       "preserve all kausality annotations and add controller hash",
+			old:        map[string]string{"kausality.io/trace": "old-trace", "kausality.io/updaters": "abc12", "kausality.io/controllers": "def34"},
+			new:        map[string]string{"kausality.io/trace": "stale", "kausality.io/updaters": "stale"},
+			userHash:   "new12",
+			generation: 5,
+			want:       map[string]string{"kausality.io/trace": "old-trace", "kausality.io/updaters": "abc12", "kausality.io/controllers": "def34,new12", "kausality.io/observedGeneration": "5"},
 		},
 		{
-			name:     "first controller hash when none exists",
-			old:      map[string]string{"kausality.io/trace": "trace"},
-			new:      map[string]string{},
-			userHash: "first",
-			want:     map[string]string{"kausality.io/trace": "trace", "kausality.io/controllers": "first"},
+			name:       "first controller hash when none exists",
+			old:        map[string]string{"kausality.io/trace": "trace"},
+			new:        map[string]string{},
+			userHash:   "first",
+			generation: 1,
+			want:       map[string]string{"kausality.io/trace": "trace", "kausality.io/controllers": "first", "kausality.io/observedGeneration": "1"},
 		},
 		{
-			name:     "preserve user annotations from old",
-			old:      map[string]string{"kausality.io/approvals": "[...]", "kausality.io/freeze": "true"},
-			new:      map[string]string{},
-			userHash: "ctrl1",
-			want:     map[string]string{"kausality.io/approvals": "[...]", "kausality.io/freeze": "true", "kausality.io/controllers": "ctrl1"},
+			name:       "preserve user annotations from old",
+			old:        map[string]string{"kausality.io/approvals": "[...]", "kausality.io/freeze": "true"},
+			new:        map[string]string{},
+			userHash:   "ctrl1",
+			generation: 3,
+			want:       map[string]string{"kausality.io/approvals": "[...]", "kausality.io/freeze": "true", "kausality.io/controllers": "ctrl1", "kausality.io/observedGeneration": "3"},
 		},
 		{
-			name:     "non-kausality annotations pass through from new",
-			old:      map[string]string{"other.io/ann": "old", "kausality.io/trace": "old-trace"},
-			new:      map[string]string{"other.io/ann": "new"},
-			userHash: "ctrl1",
-			want:     map[string]string{"other.io/ann": "new", "kausality.io/trace": "old-trace", "kausality.io/controllers": "ctrl1"},
+			name:       "non-kausality annotations pass through from new",
+			old:        map[string]string{"other.io/ann": "old", "kausality.io/trace": "old-trace"},
+			new:        map[string]string{"other.io/ann": "new"},
+			userHash:   "ctrl1",
+			generation: 7,
+			want:       map[string]string{"other.io/ann": "new", "kausality.io/trace": "old-trace", "kausality.io/controllers": "ctrl1", "kausality.io/observedGeneration": "7"},
 		},
 		{
-			name:     "nil old annotations",
-			old:      nil,
-			new:      map[string]string{"other": "value"},
-			userHash: "ctrl1",
-			want:     map[string]string{"other": "value", "kausality.io/controllers": "ctrl1"},
+			name:       "nil old annotations",
+			old:        nil,
+			new:        map[string]string{"other": "value"},
+			userHash:   "ctrl1",
+			generation: 2,
+			want:       map[string]string{"other": "value", "kausality.io/controllers": "ctrl1", "kausality.io/observedGeneration": "2"},
 		},
 		{
-			name:     "duplicate hash not added",
-			old:      map[string]string{"kausality.io/controllers": "ctrl1"},
-			new:      map[string]string{},
-			userHash: "ctrl1",
-			want:     map[string]string{"kausality.io/controllers": "ctrl1"},
+			name:       "duplicate hash not added but generation still updated",
+			old:        map[string]string{"kausality.io/controllers": "ctrl1", "kausality.io/observedGeneration": "1"},
+			new:        map[string]string{},
+			userHash:   "ctrl1",
+			generation: 2,
+			want:       map[string]string{"kausality.io/controllers": "ctrl1", "kausality.io/observedGeneration": "2"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := computeAnnotationsForStatusUpdate(tt.old, tt.new, tt.userHash)
+			got := computeAnnotationsForStatusUpdate(tt.old, tt.new, tt.userHash, tt.generation)
 			assert.Equal(t, tt.want, got)
 		})
 	}
