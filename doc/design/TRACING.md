@@ -38,7 +38,7 @@ Namespace is omitted — it's the same as the object carrying the trace (or clus
 
 **Origin (new trace):**
 - No controller ownerReference, OR
-- Parent has `generation == observedGeneration` (no active reconciliation), OR
+- Parent has `generation == observedGeneration` (no active reconciliation — includes the synthetic `kausality.io/observedGeneration` annotation for parents without native `status.observedGeneration`), OR
 - Request user is not identified as the controller (via user hash tracking)
 - → Start new trace, this user is the initiator
 

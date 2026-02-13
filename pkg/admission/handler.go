@@ -423,11 +423,11 @@ func (h *Handler) handleStatusUpdate(ctx context.Context, req admission.Request,
 		h.controllerTracker.RecordPhaseAsync(ctx, obj, string(phase))
 	}
 
-	// Compute annotations: preserve kausality annotations and add user to controllers
+	// Compute annotations: preserve kausality annotations, add user to controllers, record observed generation
 	var oldObj, newObj unstructured.Unstructured
 	if err := json.Unmarshal(req.OldObject.Raw, &oldObj); err == nil {
 		if err := json.Unmarshal(req.Object.Raw, &newObj); err == nil {
-			merged := computeAnnotationsForStatusUpdate(oldObj.GetAnnotations(), newObj.GetAnnotations(), userHash)
+			merged := computeAnnotationsForStatusUpdate(oldObj.GetAnnotations(), newObj.GetAnnotations(), userHash, obj.GetGeneration())
 			newObj.SetAnnotations(merged)
 			if modified, err := json.Marshal(newObj.Object); err == nil {
 				log.V(1).Info("status update, added controller hash and preserved annotations")
@@ -467,9 +467,10 @@ const kausalityPrefix = "kausality.io/"
 
 // systemAnnotations are annotations with special handling (recomputed on spec change).
 var systemAnnotations = map[string]bool{
-	trace.TraceAnnotation:            true,
-	controller.UpdatersAnnotation:    true,
-	controller.ControllersAnnotation: true,
+	trace.TraceAnnotation:                   true,
+	controller.UpdatersAnnotation:           true,
+	controller.ControllersAnnotation:        true,
+	controller.ObservedGenerationAnnotation: true,
 }
 
 // isSystemAnnotation returns true for annotations that get special handling.
@@ -536,8 +537,9 @@ func computeAnnotationsForUser(old, new map[string]string, specChanged bool, new
 }
 
 // computeAnnotationsForStatusUpdate computes annotations for status subresource updates.
-// Preserves all kausality annotations and adds the user hash to the controllers annotation.
-func computeAnnotationsForStatusUpdate(old, new map[string]string, userHash string) map[string]string {
+// Preserves all kausality annotations, adds the user hash to the controllers annotation,
+// and records the observed generation.
+func computeAnnotationsForStatusUpdate(old, new map[string]string, userHash string, generation int64) map[string]string {
 	result := copyAnnotations(new)
 	// Preserve all kausality annotations from old
 	for key, oldVal := range old {
@@ -548,6 +550,9 @@ func computeAnnotationsForStatusUpdate(old, new map[string]string, userHash stri
 	// Add user to controllers annotation (status updater = controller)
 	oldControllers := result[controller.ControllersAnnotation]
 	result[controller.ControllersAnnotation] = addHash(oldControllers, userHash)
+
+	// Record observed generation (controller updating status has "observed" current generation)
+	result[controller.ObservedGenerationAnnotation] = strconv.FormatInt(generation, 10)
 	return result
 }
 
@@ -1072,6 +1077,18 @@ func extractParentStateFromObject(obj client.Object) *drift.ParentState {
 		// Fallback: check conditions for observedGeneration (Crossplane style)
 		if !state.HasObservedGeneration {
 			state.ObservedGeneration, state.HasObservedGeneration = drift.ExtractConditionObservedGeneration(status)
+		}
+	}
+
+	// Fallback: kausality.io/observedGeneration annotation (synthetic observedGeneration)
+	if !state.HasObservedGeneration {
+		if annotations := obj.GetAnnotations(); annotations != nil {
+			if obsGenStr, ok := annotations[controller.ObservedGenerationAnnotation]; ok {
+				if obsGen, err := strconv.ParseInt(obsGenStr, 10, 64); err == nil {
+					state.ObservedGeneration = obsGen
+					state.HasObservedGeneration = true
+				}
+			}
 		}
 	}
 

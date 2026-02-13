@@ -457,6 +457,139 @@ func TestExtractConditionObservedGeneration(t *testing.T) {
 	}
 }
 
+func TestExtractParentState_SyntheticObservedGeneration(t *testing.T) {
+	trueVal := true
+	ownerRef := metav1.OwnerReference{
+		APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
+		Kind:       "AWSCluster",
+		Name:       "parent-cluster",
+		Controller: &trueVal,
+	}
+
+	tests := []struct {
+		name      string
+		parent    *unstructured.Unstructured
+		wantObsG  int64
+		wantHasOG bool
+	}{
+		{
+			name: "annotation fallback when no native observedGeneration",
+			parent: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+					"kind":       "AWSCluster",
+					"metadata": map[string]interface{}{
+						"name":       "parent-cluster",
+						"namespace":  "default",
+						"generation": int64(3),
+						"annotations": map[string]interface{}{
+							controller.ObservedGenerationAnnotation: "3",
+						},
+					},
+					"status": map[string]interface{}{},
+				},
+			},
+			wantObsG:  3,
+			wantHasOG: true,
+		},
+		{
+			name: "native observedGeneration takes precedence over annotation",
+			parent: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+					"kind":       "AWSCluster",
+					"metadata": map[string]interface{}{
+						"name":       "parent-cluster",
+						"namespace":  "default",
+						"generation": int64(5),
+						"annotations": map[string]interface{}{
+							controller.ObservedGenerationAnnotation: "4",
+						},
+					},
+					"status": map[string]interface{}{
+						"observedGeneration": int64(5),
+					},
+				},
+			},
+			wantObsG:  5,
+			wantHasOG: true,
+		},
+		{
+			name: "condition observedGeneration takes precedence over annotation",
+			parent: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+					"kind":       "AWSCluster",
+					"metadata": map[string]interface{}{
+						"name":       "parent-cluster",
+						"namespace":  "default",
+						"generation": int64(6),
+						"annotations": map[string]interface{}{
+							controller.ObservedGenerationAnnotation: "5",
+						},
+					},
+					"status": map[string]interface{}{
+						"conditions": []interface{}{
+							map[string]interface{}{
+								"type":               "Synced",
+								"status":             "True",
+								"observedGeneration": int64(6),
+							},
+						},
+					},
+				},
+			},
+			wantObsG:  6,
+			wantHasOG: true,
+		},
+		{
+			name: "no observedGeneration anywhere including no annotation",
+			parent: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+					"kind":       "AWSCluster",
+					"metadata": map[string]interface{}{
+						"name":       "parent-cluster",
+						"namespace":  "default",
+						"generation": int64(2),
+					},
+					"status": map[string]interface{}{},
+				},
+			},
+			wantObsG:  0,
+			wantHasOG: false,
+		},
+		{
+			name: "invalid annotation value is ignored",
+			parent: &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+					"kind":       "AWSCluster",
+					"metadata": map[string]interface{}{
+						"name":       "parent-cluster",
+						"namespace":  "default",
+						"generation": int64(2),
+						"annotations": map[string]interface{}{
+							controller.ObservedGenerationAnnotation: "not-a-number",
+						},
+					},
+					"status": map[string]interface{}{},
+				},
+			},
+			wantObsG:  0,
+			wantHasOG: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := extractParentState(tt.parent, ownerRef)
+			assert.Equal(t, tt.wantObsG, state.ObservedGeneration, "ObservedGeneration")
+			assert.Equal(t, tt.wantHasOG, state.HasObservedGeneration, "HasObservedGeneration")
+		})
+	}
+}
+
 func TestExtractParentState_CrossplaneConditions(t *testing.T) {
 	trueVal := true
 	ownerRef := metav1.OwnerReference{

@@ -58,11 +58,11 @@ The system identifies controllers by tracking which users update parent status v
 
 **Recording:**
 - Child CREATE/UPDATE (spec change only): hash added to child's `updaters` annotation (sync, via patch)
-- Parent status UPDATE: hash added to parent's `controllers` annotation (sync, via direct API call)
+- Parent status UPDATE: hash added to parent's `controllers` annotation (sync, via direct API call), plus `kausality.io/observedGeneration` set to current generation (synthetic observedGeneration for parents without native `status.observedGeneration`)
 
 Metadata-only changes do NOT record updaters - only spec changes do.
 
-Note: Controllers annotation uses direct API call because status subresource patches to metadata are ignored by Kubernetes.
+Note: Controllers and observedGeneration annotations use direct API calls because status subresource patches to metadata are ignored by Kubernetes.
 
 **Detection logic:**
 ```

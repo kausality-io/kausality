@@ -37,6 +37,11 @@ const (
 	// SnoozeAnnotation indicates drift callbacks are temporarily suppressed.
 	// Value: JSON Snooze object, or legacy RFC3339 timestamp.
 	SnoozeAnnotation = "kausality.io/snooze"
+
+	// ObservedGenerationAnnotation stores the generation observed by the controller.
+	// Written on status updates; used as fallback when status.observedGeneration is absent.
+	// Value: string representation of int64 generation.
+	ObservedGenerationAnnotation = "kausality.io/observedGeneration"
 )
 
 // Phase values for the PhaseAnnotation.
