@@ -174,21 +174,10 @@ func TestIsControllerByHash(t *testing.T) {
 		wantController   bool
 		wantCanDetermine bool
 	}{
+		// === Parent has controllers annotation: cross-validation ===
 		{
-			name: "CREATE - first updater is controller",
+			name: "single updater + parent controllers + user matches both - controller",
 			parentState: &ParentState{
-				Ref:         ParentRef{Kind: "Deployment", Name: "test"},
-				Controllers: nil, // No controllers annotation yet
-			},
-			username:         user1,
-			childUpdaters:    nil, // No updaters yet (CREATE)
-			wantController:   true,
-			wantCanDetermine: true,
-		},
-		{
-			name: "single updater matches - controller",
-			parentState: &ParentState{
-				Ref:         ParentRef{Kind: "Deployment", Name: "test"},
 				Controllers: []string{hash1},
 			},
 			username:         user1,
@@ -197,20 +186,38 @@ func TestIsControllerByHash(t *testing.T) {
 			wantCanDetermine: true,
 		},
 		{
-			name: "single updater doesn't match - not controller",
+			name: "single updater + parent controllers + user matches child only - not controller",
 			parentState: &ParentState{
-				Ref:         ParentRef{Kind: "Deployment", Name: "test"},
+				Controllers: []string{hash1}, // actual controller
+			},
+			username:         user2,           // proxy:admin
+			childUpdaters:    []string{hash2}, // only child updater is proxy:admin
+			wantController:   false,           // no intersection, check parent controllers
+			wantCanDetermine: true,
+		},
+		{
+			name: "single updater + parent controllers + user matches neither - not controller",
+			parentState: &ParentState{
 				Controllers: []string{hash1},
 			},
-			username:         user2,
-			childUpdaters:    []string{hash1},
+			username:         user3,
+			childUpdaters:    []string{hash2},
 			wantController:   false,
 			wantCanDetermine: true,
 		},
 		{
-			name: "multiple updaters with parent controllers - intersection match",
+			name: "single updater + parent controllers + user matches parent only - controller",
 			parentState: &ParentState{
-				Ref:         ParentRef{Kind: "Deployment", Name: "test"},
+				Controllers: []string{hash1},
+			},
+			username:         user1,
+			childUpdaters:    []string{hash2}, // child updated by someone else
+			wantController:   true,            // no intersection, but user is in parent controllers
+			wantCanDetermine: true,
+		},
+		{
+			name: "multiple updaters + parent controllers + intersection match",
+			parentState: &ParentState{
 				Controllers: []string{hash1, hash2},
 			},
 			username:         user1,
@@ -219,14 +226,23 @@ func TestIsControllerByHash(t *testing.T) {
 			wantCanDetermine: true,
 		},
 		{
-			name: "multiple updaters with parent controllers - not in intersection",
+			name: "multiple updaters + parent controllers + not in intersection",
 			parentState: &ParentState{
-				Ref:         ParentRef{Kind: "Deployment", Name: "test"},
 				Controllers: []string{hash1},
 			},
 			username:         user3,
 			childUpdaters:    []string{hash1, hash3},
 			wantController:   false,
+			wantCanDetermine: true,
+		},
+		{
+			name: "multiple updaters + parent controllers + no intersection - check parent controllers",
+			parentState: &ParentState{
+				Controllers: []string{hash1},
+			},
+			username:         user1,
+			childUpdaters:    []string{hash2, hash3}, // neither in parent controllers
+			wantController:   true,                   // user is in parent controllers
 			wantCanDetermine: true,
 		},
 		{
@@ -241,9 +257,60 @@ func TestIsControllerByHash(t *testing.T) {
 			wantCanDetermine: true,
 		},
 		{
-			name: "multiple updaters no parent controllers - can't determine",
+			name: "CREATE + parent controllers + user in controllers - controller",
 			parentState: &ParentState{
-				Ref:         ParentRef{Kind: "Deployment", Name: "test"},
+				Controllers: []string{hash1},
+			},
+			username:         user1,
+			childUpdaters:    nil,
+			wantController:   true,
+			wantCanDetermine: true,
+		},
+		{
+			name: "CREATE + parent controllers + user not in controllers - not controller",
+			parentState: &ParentState{
+				Controllers: []string{hash1},
+			},
+			username:         user2,
+			childUpdaters:    nil,
+			wantController:   false,
+			wantCanDetermine: true,
+		},
+
+		// === No parent controllers: child updaters heuristic ===
+		{
+			name: "single updater + no parent controllers + matches - controller (heuristic)",
+			parentState: &ParentState{
+				Controllers: nil,
+			},
+			username:         user1,
+			childUpdaters:    []string{hash1},
+			wantController:   true,
+			wantCanDetermine: true,
+		},
+		{
+			name: "single updater + no parent controllers + no match - not controller (heuristic)",
+			parentState: &ParentState{
+				Controllers: nil,
+			},
+			username:         user2,
+			childUpdaters:    []string{hash1},
+			wantController:   false,
+			wantCanDetermine: true,
+		},
+		{
+			name: "CREATE + no parent controllers - assumes controller",
+			parentState: &ParentState{
+				Controllers: nil,
+			},
+			username:         user1,
+			childUpdaters:    nil,
+			wantController:   true,
+			wantCanDetermine: true,
+		},
+		{
+			name: "multiple updaters + no parent controllers - can't determine",
+			parentState: &ParentState{
 				Controllers: nil,
 			},
 			username:         user1,

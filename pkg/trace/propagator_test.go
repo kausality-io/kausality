@@ -10,7 +10,6 @@ import (
 )
 
 func TestPropagator_isOrigin(t *testing.T) {
-	// Generate user hashes
 	controllerUser := "system:serviceaccount:kube-system:deployment-controller"
 	otherUser := "admin@example.com"
 	controllerHash := controller.HashUsername(controllerUser)
@@ -30,47 +29,87 @@ func TestPropagator_isOrigin(t *testing.T) {
 			username:    controllerUser,
 			wantOrigin:  true,
 		},
+
+		// === Has observedGeneration ===
 		{
-			name: "gen == obsGen (not reconciling) - origin",
+			name: "has obsGen + stable + is controller - origin",
 			parentState: &drift.ParentState{
-				Generation:         5,
-				ObservedGeneration: 5,
+				HasObservedGeneration: true,
+				Generation:            5,
+				ObservedGeneration:    5,
+				Controllers:           []string{controllerHash},
 			},
 			username:      controllerUser,
 			childUpdaters: []string{controllerHash},
 			wantOrigin:    true,
 		},
 		{
-			name: "gen != obsGen, is controller - hop (extend trace)",
+			name: "has obsGen + reconciling + is controller - extend",
 			parentState: &drift.ParentState{
-				Generation:         6,
-				ObservedGeneration: 5,
+				HasObservedGeneration: true,
+				Generation:            6,
+				ObservedGeneration:    5,
+				Controllers:           []string{controllerHash},
 			},
 			username:      controllerUser,
 			childUpdaters: []string{controllerHash},
 			wantOrigin:    false,
 		},
 		{
-			name: "gen != obsGen, different actor with parent controllers - origin",
+			name: "has obsGen + reconciling + different actor with parent controllers - origin",
 			parentState: &drift.ParentState{
-				Generation:         6,
-				ObservedGeneration: 5,
-				Controllers:        []string{controllerHash},
+				HasObservedGeneration: true,
+				Generation:            6,
+				ObservedGeneration:    5,
+				Controllers:           []string{controllerHash},
 			},
 			username:      otherUser,
 			childUpdaters: []string{controllerHash, controller.HashUsername(otherUser)},
 			wantOrigin:    true,
 		},
 		{
-			name: "gen != obsGen, different actor without parent controllers - hop (lenient)",
+			name: "has obsGen + reconciling + can't determine controller - extend (lenient)",
 			parentState: &drift.ParentState{
-				Generation:         6,
-				ObservedGeneration: 5,
-				Controllers:        nil, // no controllers annotation
+				HasObservedGeneration: true,
+				Generation:            6,
+				ObservedGeneration:    5,
+				Controllers:           nil,
 			},
 			username:      otherUser,
 			childUpdaters: []string{controllerHash, controller.HashUsername(otherUser)},
-			wantOrigin:    false, // can't determine, assume hop
+			wantOrigin:    false,
+		},
+
+		// === No observedGeneration ===
+		{
+			name: "no obsGen + user is NOT controller (cross-validated) - origin",
+			parentState: &drift.ParentState{
+				Generation:  1,
+				Controllers: []string{controllerHash},
+			},
+			username:      otherUser,
+			childUpdaters: []string{controller.HashUsername(otherUser)},
+			wantOrigin:    true,
+		},
+		{
+			name: "no obsGen + user IS controller (confirmed) - extend",
+			parentState: &drift.ParentState{
+				Generation:  1,
+				Controllers: []string{controllerHash},
+			},
+			username:      controllerUser,
+			childUpdaters: []string{controllerHash},
+			wantOrigin:    false,
+		},
+		{
+			name: "no obsGen + can't determine controller - origin (safer default)",
+			parentState: &drift.ParentState{
+				Generation:  1,
+				Controllers: nil,
+			},
+			username:      otherUser,
+			childUpdaters: []string{controllerHash, controller.HashUsername(otherUser)},
+			wantOrigin:    true,
 		},
 	}
 
