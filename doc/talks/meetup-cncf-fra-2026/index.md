@@ -1,36 +1,7 @@
 ---
 marp: true
-theme: uncover
+theme: dracula
 paginate: true
-backgroundColor: #fff
-style: |
-  section {
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-  }
-  section.lead h1 {
-    font-size: 2.5em;
-  }
-  section.lead p {
-    font-size: 1.2em;
-  }
-  blockquote {
-    border-left: 4px solid #2563eb;
-    padding-left: 1em;
-    color: #374151;
-    font-style: italic;
-  }
-  table {
-    font-size: 0.85em;
-  }
-  code {
-    font-size: 0.85em;
-  }
-  pre {
-    font-size: 0.75em;
-  }
-  section.small-code pre {
-    font-size: 0.65em;
-  }
 ---
 
 <!-- _class: lead -->
@@ -42,17 +13,8 @@ style: |
 
 *"Every mutation needs a cause."*
 
+Dr. Stefan Schimanski -- Principal Engineer, NVIDIA
 CNCF Frankfurt Meetup 2026
-
----
-
-## About Me
-
-<!-- TODO: fill in speaker details -->
-
-- **Name**: Dr. Stefan Schimanski
-- **Role**: ...
-- **GitHub**: github.com/sttts
 
 ---
 
