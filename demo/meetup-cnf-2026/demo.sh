@@ -7,6 +7,7 @@ cd "$DEMO_DIR"
 # demo-magic setup
 . ./demo-magic.sh
 TYPE_SPEED=40
+COMMENT_SPEED=80
 NO_WAIT=false
 
 # Abbreviated cwd for prompt (~/Q/k/d/meetup-cnf-2026 style).
@@ -124,8 +125,11 @@ function p() {
         cmd=$DEMO_CMD_COLOR$1$COLOR_RESET
     fi
 
+    local orig_speed=$TYPE_SPEED
+    TYPE_SPEED=$COMMENT_SPEED
     _prompt
     _type_text "$cmd"
+    TYPE_SPEED=$orig_speed
     echo ""
 }
 
@@ -163,7 +167,6 @@ p "# Create a Kausality policy — enforce mode for our Crossplane resources."
 pe "cat manifests/kausality-policy.yaml"
 wait
 pe "kubectl apply -f manifests/kausality-policy.yaml"
-wait
 
 p ""
 p "# Apply XRDs and Compositions for our GPU inference hierarchy."
@@ -194,7 +197,6 @@ p "# Now create the XInferenceCluster — 8x B200 GPUs for our LLM training."
 pe "cat manifests/xinferencecluster.yaml"
 wait
 pe "kubectl apply -f manifests/xinferencecluster.yaml"
-wait
 
 p ""
 pe "kubectl wait --for=condition=Ready xinferencecluster/llm-d-cluster --timeout=60s"
@@ -228,13 +230,11 @@ wait
 p ""
 p "# Scale up the node pool — exactly like the GPU story. 8 → 16 replicas."
 pe "kubectl patch xinferencecluster llm-d-cluster --type=merge -p '{\"spec\":{\"nodePools\":[{\"name\":\"training\",\"gpu\":\"b200\",\"replicas\":16}]}}'"
-wait
 
 p ""
 p "# Parent generation bumped — reconciliation is in progress."
 pe "kubectl get xinferencecluster llm-d-cluster -o jsonpath='generation={.metadata.generation} observedGeneration={.status.conditions[?(@.type==\"Synced\")].observedGeneration}'"
 p ""
-wait
 
 p ""
 pe "kubectl wait --for=condition=Synced xinferencecluster/llm-d-cluster --timeout=30s"
