@@ -16,7 +16,7 @@ echo "  Cluster reachable."
 
 # Step 2: Verify kausality is running
 echo "Checking kausality..."
-kubectl get pods -n kausality-system -l app.kubernetes.io/name=kausality-webhook --no-headers | grep -q Running || {
+kubectl rollout status deployment/kausality-webhook -n kausality-system --timeout=5s > /dev/null 2>&1 || {
     echo "ERROR: Kausality webhook not running. Run 'tilt up' or 'make install'."
     exit 1
 }
@@ -24,7 +24,7 @@ echo "  Kausality webhook running."
 
 # Step 3: Verify Crossplane is running
 echo "Checking Crossplane..."
-kubectl get pods -n crossplane-system --no-headers 2>/dev/null | grep -q Running || {
+kubectl rollout status deployment/crossplane -n crossplane-system --timeout=5s > /dev/null 2>&1 || {
     echo "ERROR: Crossplane not running. Run 'make install-crossplane'."
     exit 1
 }
