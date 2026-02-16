@@ -340,12 +340,10 @@ p ""
 p "# Cleanup."
 
 pe "kubectl delete xinferencecluster llm-d-cluster"
-wait
-
-p ""
+NO_WAIT=true
 pe "sleep 5  # wait for cascade delete"
 pe "kubectl get xinferencecluster,xgpucluster,nopresource 2>&1 || true"
-wait
+NO_WAIT=false
 
 p ""
 p "# That's kausality. Causal drift detection for Kubernetes."
