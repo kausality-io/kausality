@@ -253,8 +253,7 @@ p "# — bypassing the parent XInferenceCluster."
 
 pe "kubectl patch xgpucluster $GPU_NAME --type=merge -p '{\"spec\":{\"replicas\":1000}}'"
 p ""
-p "# Patch succeeded — this is a NEW CAUSAL ORIGIN."
-p "# Different actor, not the controller. Not drift."
+p "# New causal origin. But the parent still says 16 — Crossplane will drift."
 wait
 
 p ""
@@ -308,13 +307,32 @@ p "# With kausality, they're protected."
 wait
 
 # ============================================================================
-# Act 5 — "Lifecycle: Deletion"
+# Act 5 — "Resolution"
 # ============================================================================
 
 p ""
-p "# Act 5: Cleanup"
-p "# Delete the root resource. Kausality allows all controller activity"
-p "# during the deletion phase."
+p "# Act 5: Resolution"
+p "# The platform team decides: accept 16 replicas, let Crossplane reconcile."
+p "# Approve drift on the parent — kausality will let the controller through."
+
+pe "kubectl annotate xinferencecluster llm-d-cluster --overwrite kausality.io/approvals='[{\"apiVersion\":\"test.kausality.io/v1alpha1\",\"kind\":\"XGPUCluster\",\"name\":\"*\",\"mode\":\"always\"}]'"
+wait
+
+p ""
+p "# Crossplane reconciles — replicas go back to 16."
+pe "sleep 10  # give Crossplane time to reconcile"
+
+pe "kubectl get xgpucluster $GPU_NAME -o jsonpath='replicas={.spec.replicas}'"
+p ""
+p "# Drift resolved. The approval let Crossplane do its job."
+wait
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+
+p ""
+p "# Cleanup."
 
 pe "kubectl delete xinferencecluster llm-d-cluster"
 wait
