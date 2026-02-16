@@ -6,7 +6,7 @@ cd "$DEMO_DIR"
 
 # demo-magic setup
 . ./demo-magic.sh
-TYPE_SPEED=40
+TYPE_SPEED=60
 COMMENT_SPEED=80
 NO_WAIT=false
 
@@ -28,6 +28,7 @@ _abbrev_path() {
 }
 _PROMPT_PATH="$(_abbrev_path)"
 _LAST_RC=0
+_AFTER_COMMENT=false
 
 # Render prompt: grey path + green/red ❯ based on last command's exit code.
 _prompt() {
@@ -65,6 +66,7 @@ function wait() {
     else
         read -rt "$PROMPT_TIMEOUT" </dev/tty
     fi
+    _AFTER_COMMENT=false
 }
 
 # Override run_cmd: track exit code for prompt color.
@@ -105,9 +107,10 @@ _type_cmd() {
 
     _prompt
 
-    if [[ "$NO_WAIT" == "false" ]]; then
+    if [[ "$NO_WAIT" == "false" ]] && [[ "$_AFTER_COMMENT" == "false" ]]; then
         _keypress
     fi
+    _AFTER_COMMENT=false
 
     _type_text "$cmd"
 }
@@ -131,6 +134,7 @@ function p() {
     _type_text "$cmd"
     TYPE_SPEED=$orig_speed
     echo ""
+    _AFTER_COMMENT=true
 }
 
 # Override pe: 2 keypresses — one to start typing, one to "execute".
@@ -178,7 +182,9 @@ pe "kubectl apply -f manifests/xinferencecluster-composition.yaml"
 NO_WAIT=false
 
 p ""
+NO_WAIT=true
 pe "kubectl wait --for=condition=Established xrd/xgpuclusters.test.kausality.io xrd/xinferenceclusters.test.kausality.io --timeout=60s"
+NO_WAIT=false
 
 p ""
 p "# Our composition hierarchy:"
@@ -190,7 +196,6 @@ p "#   XGPUCluster          ← composed by Crossplane"
 p "#         │"
 p "#         ▼"
 p "#   NopResource          ← leaf managed resource"
-wait
 
 p ""
 p "# Now create the XInferenceCluster — 8x B200 GPUs for our LLM training."
@@ -199,7 +204,9 @@ wait
 pe "kubectl apply -f manifests/xinferencecluster.yaml"
 
 p ""
+NO_WAIT=true
 pe "kubectl wait --for=condition=Ready xinferencecluster/llm-d-cluster --timeout=60s"
+NO_WAIT=false
 
 pe "kubectl get xinferencecluster,xgpucluster,nopresource"
 wait
@@ -237,7 +244,9 @@ pe "kubectl get xinferencecluster llm-d-cluster -o jsonpath='generation={.metada
 p ""
 
 p ""
+NO_WAIT=true
 pe "kubectl wait --for=condition=Synced xinferencecluster/llm-d-cluster --timeout=30s"
+NO_WAIT=false
 
 pe "kubectl get xinferencecluster llm-d-cluster -o jsonpath='generation={.metadata.generation} observedGeneration={.status.conditions[?(@.type==\"Synced\")].observedGeneration}'"
 p ""
@@ -256,7 +265,6 @@ p "# — bypassing the parent XInferenceCluster."
 pe "kubectl patch xgpucluster $GPU_NAME --type=merge -p '{\"spec\":{\"replicas\":1000}}'"
 p ""
 p "# New causal origin — allowed. Crossplane's correction will be blocked as drift."
-wait
 
 p ""
 p "# The trace resets — fresh 1-hop origin."
@@ -287,10 +295,6 @@ p "# Act 4: Drift Detection"
 p "# Crossplane sees the mismatch. It tries to reset replicas to 16."
 p "# But XInferenceCluster hasn't changed — gen equals obsGen."
 p "# Nobody asked for this. That's DRIFT."
-wait
-
-p ""
-pe "sleep 15  # give Crossplane time to attempt reconciliation"
 
 pe "kubectl get xgpucluster $GPU_NAME -o jsonpath='replicas={.spec.replicas}'"
 p ""
@@ -306,7 +310,6 @@ p ""
 p "# DRIFT DETECTED — Crossplane's revert was blocked."
 p "# In the Terraform story, the GPUs were gone."
 p "# With kausality, they're protected."
-wait
 
 # ============================================================================
 # Act 5 — "Resolution"
