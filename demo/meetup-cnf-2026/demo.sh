@@ -2,12 +2,149 @@
 set -euo pipefail
 
 DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$DEMO_DIR"
 
 # demo-magic setup
-. "$DEMO_DIR/demo-magic.sh"
+. ./demo-magic.sh
 TYPE_SPEED=40
 NO_WAIT=false
-DEMO_PROMPT="${GREEN}➜ ${COLOR_RESET}"
+
+# Abbreviated cwd for prompt (~/Q/k/d/meetup-cnf-2026 style).
+_abbrev_path() {
+    local cwd="${PWD/#$HOME/\~}"
+    local IFS='/'
+    local -a parts=($cwd)
+    local result="" last=$((${#parts[@]} - 1))
+    for i in "${!parts[@]}"; do
+        if [[ $i -eq $last ]] || [[ $i -eq 0 ]]; then
+            result+="${parts[$i]}"
+        else
+            result+="${parts[$i]:0:1}"
+        fi
+        [[ $i -lt $last ]] && result+="/"
+    done
+    printf '%s' "$result"
+}
+_PROMPT_PATH="$(_abbrev_path)"
+_LAST_RC=0
+
+# Render prompt: grey path + green/red ❯ based on last command's exit code.
+_prompt() {
+    local arrow
+    if [[ $_LAST_RC -eq 0 ]]; then arrow="$GREEN"; else arrow="$RED"; fi
+    printf "${GREY}${_PROMPT_PATH} ${arrow}❯${COLOR_RESET} "
+}
+
+# Keypress before typing: reprint prompt on Enter to stay on the right line.
+# No cursor save/restore — relative movement handles terminal scroll correctly.
+_keypress() {
+    IFS= read -rn1 key </dev/tty
+    if [[ -z "$key" ]]; then
+        # Enter: cursor went down. Go back up, clear line, reprint prompt.
+        printf '\033[A\r\033[K'
+        _prompt
+    else
+        # Any other key: clear line and reprint prompt (erase echoed char).
+        printf '\r\033[K'
+        _prompt
+    fi
+}
+
+# Override wait: show prompt, clean up on keypress.
+# \033[A is relative (works even when terminal scrolls on Enter).
+# \033[J clears the prompt line AND the blank line from Enter's echo.
+function wait() {
+    if [[ "$PROMPT_TIMEOUT" == "0" ]]; then
+        _prompt
+        IFS= read -rn1 key </dev/tty
+        if [[ -z "$key" ]]; then
+            printf '\033[A'    # Enter: go back up to prompt line
+        fi
+        printf '\r\033[J'     # clear from here to end of screen
+    else
+        read -rt "$PROMPT_TIMEOUT" </dev/tty
+    fi
+}
+
+# Override run_cmd: track exit code for prompt color.
+run_cmd() {
+    trap '' SIGINT
+    stty -echoctl
+    eval "$@"
+    _LAST_RC=$?
+    stty echoctl
+    trap - SIGINT
+}
+
+# Type text with pv animation.
+# igncr during pv silently drops Enter (no echo, no newline, no input).
+# Redraw after pv fixes any other stray chars that were echoed.
+_type_text() {
+    if [[ -z $TYPE_SPEED ]]; then
+        echo -en "$1"
+        return
+    fi
+    stty igncr </dev/tty
+    echo -en "$1" | pv -qL $[$TYPE_SPEED+(-2 + RANDOM%5)]
+    stty -igncr </dev/tty
+
+    # Redraw the line to fix any stray echoed chars from during pv.
+    printf '\r\033[K'
+    _prompt
+    echo -en "$1"
+}
+
+# Shared helper: render prompt, wait for keypress, type text. No newline.
+_type_cmd() {
+    if [[ ${1:0:1} == "#" ]]; then
+        cmd=$DEMO_COMMENT_COLOR$1$COLOR_RESET
+    else
+        cmd=$DEMO_CMD_COLOR$1$COLOR_RESET
+    fi
+
+    _prompt
+
+    if [[ "$NO_WAIT" == "false" ]]; then
+        _keypress
+    fi
+
+    _type_text "$cmd"
+}
+
+# Override p: comments/narration type out immediately with no keypress.
+function p() {
+    if [[ -z "$1" ]]; then
+        echo ""
+        return
+    fi
+
+    if [[ ${1:0:1} == "#" ]]; then
+        cmd=$DEMO_COMMENT_COLOR$1$COLOR_RESET
+    else
+        cmd=$DEMO_CMD_COLOR$1$COLOR_RESET
+    fi
+
+    _prompt
+    _type_text "$cmd"
+    echo ""
+}
+
+# Override pe: 2 keypresses — one to start typing, one to "execute".
+function pe() {
+    _type_cmd "$@"
+    # Second keypress: "press Enter to execute".
+    if [[ "$NO_WAIT" == "false" ]]; then
+        IFS= read -rn1 key </dev/tty
+        if [[ -z "$key" ]]; then
+            :  # Enter: newline already echoed — serves as execution newline
+        else
+            printf '\b \b\n'  # erase echoed char, then newline
+        fi
+    else
+        echo ""
+    fi
+    run_cmd "$@"
+}
 
 clear
 
@@ -17,42 +154,36 @@ clear
 
 p "# Act 1: The Setup"
 p "# Let's see kausality running in our cluster."
-wait
 
 pe "kubectl get pods -n kausality-system"
 wait
 
 p ""
 p "# Create a Kausality policy — enforce mode for our Crossplane resources."
-pe "cat $DEMO_DIR/manifests/kausality-policy.yaml"
+pe "cat manifests/kausality-policy.yaml"
 wait
-pe "kubectl apply -f $DEMO_DIR/manifests/kausality-policy.yaml"
+pe "kubectl apply -f manifests/kausality-policy.yaml"
 wait
 
 p ""
 p "# Apply XRDs and Compositions for our GPU inference hierarchy."
-pe "kubectl apply -f $DEMO_DIR/manifests/xgpucluster-xrd.yaml"
-pe "kubectl apply -f $DEMO_DIR/manifests/xinferencecluster-xrd.yaml"
-pe "kubectl apply -f $DEMO_DIR/manifests/xgpucluster-composition.yaml"
-pe "kubectl apply -f $DEMO_DIR/manifests/xinferencecluster-composition.yaml"
+pe "kubectl apply -f manifests/xgpucluster-xrd.yaml"
+pe "kubectl apply -f manifests/xinferencecluster-xrd.yaml"
+pe "kubectl apply -f manifests/xgpucluster-composition.yaml"
+pe "kubectl apply -f manifests/xinferencecluster-composition.yaml"
 
 p ""
-p "# Wait for XRDs to be established..."
-kubectl wait --for=condition=Established compositeresourcedefinition/xgpuclusters.test.kausality.io --timeout=60s
-kubectl wait --for=condition=Established compositeresourcedefinition/xinferenceclusters.test.kausality.io --timeout=60s
-p "# XRDs established."
-wait
+pe "kubectl wait --for=condition=Established xrd/xgpuclusters.test.kausality.io xrd/xinferenceclusters.test.kausality.io --timeout=60s"
 
 p ""
 p "# Now create the XInferenceCluster — 8x B200 GPUs for our LLM training."
-pe "cat $DEMO_DIR/manifests/xinferencecluster.yaml"
+pe "cat manifests/xinferencecluster.yaml"
 wait
-pe "kubectl apply -f $DEMO_DIR/manifests/xinferencecluster.yaml"
+pe "kubectl apply -f manifests/xinferencecluster.yaml"
 wait
 
 p ""
-p "# Wait for the composition hierarchy to build..."
-sleep 15
+pe "kubectl wait --for=condition=Ready xinferencecluster/llm-d-cluster --timeout=60s"
 
 pe "kubectl get xinferencecluster,xgpucluster,nopresource"
 wait
@@ -75,7 +206,6 @@ wait
 
 p "# Act 2: Reconciliation is Expected"
 p "# The parent is stable — generation equals observedGeneration."
-wait
 
 pe "kubectl get xinferencecluster llm-d-cluster -o jsonpath='generation={.metadata.generation} observedGeneration={.status.conditions[?(@.type==\"Synced\")].observedGeneration}'"
 p ""
@@ -93,8 +223,7 @@ p ""
 wait
 
 p ""
-p "# Wait for reconciliation to complete..."
-sleep 15
+pe "kubectl wait --for=condition=Synced xinferencecluster/llm-d-cluster --timeout=30s"
 
 pe "kubectl get xinferencecluster llm-d-cluster -o jsonpath='generation={.metadata.generation} observedGeneration={.status.conditions[?(@.type==\"Synced\")].observedGeneration}'"
 p ""
@@ -109,7 +238,6 @@ p ""
 p "# Act 3: New Causal Origin"
 p "# A platform engineer directly scales the GPU cluster to 1000"
 p "# — bypassing the parent XInferenceCluster."
-wait
 
 pe "kubectl patch xgpucluster $GPU_NAME --type=merge -p '{\"spec\":{\"replicas\":1000}}'"
 p ""
@@ -149,8 +277,7 @@ p "# Nobody asked for this. That's DRIFT."
 wait
 
 p ""
-p "# Waiting for Crossplane reconciliation attempt..."
-sleep 15
+pe "sleep 15  # give Crossplane time to attempt reconciliation"
 
 pe "kubectl get xgpucluster $GPU_NAME -o jsonpath='replicas={.spec.replicas}'"
 p ""
@@ -176,14 +303,12 @@ p ""
 p "# Act 5: Cleanup"
 p "# Delete the root resource. Kausality allows all controller activity"
 p "# during the deletion phase."
-wait
 
 pe "kubectl delete xinferencecluster llm-d-cluster"
 wait
 
 p ""
-p "# Resources are cleaned up."
-sleep 5
+pe "sleep 5  # wait for cascade delete"
 pe "kubectl get xinferencecluster,xgpucluster,nopresource 2>&1 || true"
 wait
 
