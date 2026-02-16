@@ -167,10 +167,12 @@ wait
 
 p ""
 p "# Apply XRDs and Compositions for our GPU inference hierarchy."
+NO_WAIT=true
 pe "kubectl apply -f manifests/xgpucluster-xrd.yaml"
 pe "kubectl apply -f manifests/xinferencecluster-xrd.yaml"
 pe "kubectl apply -f manifests/xgpucluster-composition.yaml"
 pe "kubectl apply -f manifests/xinferencecluster-composition.yaml"
+NO_WAIT=false
 
 p ""
 pe "kubectl wait --for=condition=Established xrd/xgpuclusters.test.kausality.io xrd/xinferenceclusters.test.kausality.io --timeout=60s"
