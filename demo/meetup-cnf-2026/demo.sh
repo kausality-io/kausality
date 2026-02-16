@@ -253,7 +253,7 @@ p "# — bypassing the parent XInferenceCluster."
 
 pe "kubectl patch xgpucluster $GPU_NAME --type=merge -p '{\"spec\":{\"replicas\":1000}}'"
 p ""
-p "# New causal origin. But the parent still says 16 — Crossplane will drift."
+p "# New causal origin — allowed. Crossplane's correction will be blocked as drift."
 wait
 
 p ""
