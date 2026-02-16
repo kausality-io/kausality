@@ -74,6 +74,64 @@ if command -v bat &>/dev/null; then
     cat() { command bat --style=plain --paging=never "$@"; }
 fi
 
+# Act banner: gradient-framed box, per-act color, waits for keypress.
+act() {
+    local num="$1" title="$2"
+    local -a clrs=("\033[1;36m" "\033[1;32m" "\033[1;33m" "\033[1;31m" "\033[1;32m" "\033[1;35m")
+    local C="${clrs[$((num-1))]}"
+    local W='\033[1;37m' R='\033[0m'
+
+    local inner=50
+    local grad=$((inner - 2))
+    local pad=$((inner - 19 - ${#num} - ${#title}))
+
+    printf -v fill '%*s' "$grad" ''; fill=${fill// /█}
+    printf -v spc '%*s' "$inner" ''
+    printf -v rpad '%*s' "$pad" ''
+
+    echo ""
+    echo -e "    ${C}░▒▓${fill}▓▒░${R}"
+    echo -e "    ${C}██${spc}██${R}"
+    echo -e "    ${C}██${R}      ${C}◆${R}  ${W}ACT ${num}${R}  ${C}──${R}  ${W}${title}${R}${rpad}${C}██${R}"
+    echo -e "    ${C}██${spc}██${R}"
+    echo -e "    ${C}░▒▓${fill}▓▒░${R}"
+    echo ""
+
+    # Wait for keypress to continue.
+    IFS= read -rn1 key </dev/tty
+    if [[ -z "$key" ]]; then
+        printf '\033[A'
+    fi
+    printf '\r\033[J'
+    _AFTER_COMMENT=true
+}
+
+# Show composition hierarchy with one level highlighted in bold yellow.
+# $1 = highlight level (0=none, 1=top, 2=mid, 3=leaf)
+# $2, $3, $4 = optional labels per level (defaults provided).
+_hierarchy() {
+    local hl="${1:-0}"
+    local l1="${2:-}" l2="${3:-}" l3="${4:-}"
+    [[ -z "$l1" ]] && l1="← user creates this"
+    [[ -z "$l2" ]] && l2="← composed by Crossplane"
+    [[ -z "$l3" ]] && l3="← leaf managed resource"
+    local HI='\033[1;33m' CC="$DEMO_COMMENT_COLOR" R="$COLOR_RESET"
+
+    local c1="$CC" c2="$CC" c3="$CC"
+    [[ "$hl" == "1" ]] && c1="$HI"
+    [[ "$hl" == "2" ]] && c2="$HI"
+    [[ "$hl" == "3" ]] && c3="$HI"
+
+    _prompt; echo -e "${c1}#   XInferenceCluster    ${l1}${R}"
+    _prompt; echo -e "${CC}#         │${R}"
+    _prompt; echo -e "${CC}#         ▼${R}"
+    _prompt; echo -e "${c2}#   XGPUCluster          ${l2}${R}"
+    _prompt; echo -e "${CC}#         │${R}"
+    _prompt; echo -e "${CC}#         ▼${R}"
+    _prompt; echo -e "${c3}#   NopResource          ${l3}${R}"
+    _AFTER_COMMENT=true
+}
+
 # Override run_cmd: track exit code for prompt color.
 run_cmd() {
     trap '' SIGINT
@@ -165,7 +223,7 @@ clear
 # Act 1 — "The Setup"
 # ============================================================================
 
-p "# Act 1: The Setup"
+act 1 "The Setup"
 p "# Let's see kausality running in our cluster."
 
 pe "kubectl get pods -n kausality-system"
@@ -193,14 +251,7 @@ NO_WAIT=false
 
 p ""
 p "# Our composition hierarchy:"
-p "#"
-p "#   XInferenceCluster    ← user creates this"
-p "#         │"
-p "#         ▼"
-p "#   XGPUCluster          ← composed by Crossplane"
-p "#         │"
-p "#         ▼"
-p "#   NopResource          ← leaf managed resource"
+_hierarchy 1 "◀── user creates this"
 
 p ""
 p "# Now create the XInferenceCluster — 8x B200 GPUs for our LLM training."
@@ -232,7 +283,7 @@ wait
 # Act 2 — "Reconciliation is Expected"
 # ============================================================================
 
-p "# Act 2: Reconciliation is Expected"
+act 2 "Reconciliation is Expected"
 p "# The parent is stable — generation equals observedGeneration."
 
 pe "kubectl get xinferencecluster llm-d-cluster -o jsonpath='generation={.metadata.generation} observedGeneration={.status.conditions[?(@.type==\"Synced\")].observedGeneration}'"
@@ -241,6 +292,7 @@ wait
 
 p ""
 p "# Scale up the node pool — exactly like the GPU story. 8 → 16 replicas."
+_hierarchy 1 "◀── 8 → 16 replicas"
 pe "kubectl patch xinferencecluster llm-d-cluster --type=merge -p '{\"spec\":{\"nodePools\":[{\"name\":\"training\",\"gpu\":\"b200\",\"replicas\":16}]}}'"
 
 p ""
@@ -262,10 +314,10 @@ wait
 # Act 3 — "New Causal Origin"
 # ============================================================================
 
-p ""
-p "# Act 3: New Causal Origin"
+act 3 "New Causal Origin"
 p "# A platform engineer directly scales the GPU cluster to 1000"
 p "# — bypassing the parent XInferenceCluster."
+_hierarchy 2 "← 16 replicas" "◀── patched to 1000!"
 
 pe "kubectl patch xgpucluster $GPU_NAME --type=merge -p '{\"spec\":{\"replicas\":1000}}'"
 p ""
@@ -295,8 +347,7 @@ wait
 # Act 4 — "Drift Detection" (climax)
 # ============================================================================
 
-p ""
-p "# Act 4: Drift Detection"
+act 4 "Drift Detection"
 p "# Crossplane sees the mismatch. It tries to reset replicas to 16."
 p "# But XInferenceCluster hasn't changed — gen equals obsGen."
 p "# Nobody asked for this. That's DRIFT."
@@ -320,12 +371,13 @@ p "# With kausality, they're protected."
 # Act 5 — "Resolution"
 # ============================================================================
 
-p ""
-p "# Act 5: Resolution"
+act 5 "Resolution"
 p "# The platform team decides: accept 16 replicas, let Crossplane reconcile."
-p "# Approve drift on the parent — kausality will let the controller through."
+p "# Approve drift for this generation — kausality will let the controller through."
+_hierarchy 1 "◀── approve drift" "← 1000 → 16"
 
-pe "kubectl annotate xinferencecluster llm-d-cluster --overwrite kausality.io/approvals='[{\"apiVersion\":\"test.kausality.io/v1alpha1\",\"kind\":\"XGPUCluster\",\"name\":\"*\",\"mode\":\"always\"}]'"
+PARENT_GEN=$(kubectl get xinferencecluster llm-d-cluster -o jsonpath='{.metadata.generation}')
+pe "kubectl annotate xinferencecluster llm-d-cluster --overwrite kausality.io/approvals='[{\"apiVersion\":\"test.kausality.io/v1alpha1\",\"kind\":\"XGPUCluster\",\"name\":\"*\",\"mode\":\"generation\",\"generation\":'$PARENT_GEN'}]'"
 wait
 
 p ""
@@ -338,11 +390,10 @@ p "# Drift resolved. The approval let Crossplane do its job."
 wait
 
 # ============================================================================
-# Cleanup
+# Act 6 — "Cleanup"
 # ============================================================================
 
-p ""
-p "# Cleanup."
+act 6 "Cleanup"
 
 pe "kubectl delete xinferencecluster llm-d-cluster"
 NO_WAIT=true
