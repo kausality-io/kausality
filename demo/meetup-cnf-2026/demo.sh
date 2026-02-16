@@ -176,6 +176,18 @@ p ""
 pe "kubectl wait --for=condition=Established xrd/xgpuclusters.test.kausality.io xrd/xinferenceclusters.test.kausality.io --timeout=60s"
 
 p ""
+p "# Our composition hierarchy:"
+p "#"
+p "#   XInferenceCluster    ← user creates this"
+p "#         │"
+p "#         ▼"
+p "#   XGPUCluster          ← composed by Crossplane"
+p "#         │"
+p "#         ▼"
+p "#   NopResource          ← leaf managed resource"
+wait
+
+p ""
 p "# Now create the XInferenceCluster — 8x B200 GPUs for our LLM training."
 pe "cat manifests/xinferencecluster.yaml"
 wait
