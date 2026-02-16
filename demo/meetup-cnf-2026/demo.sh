@@ -69,6 +69,11 @@ function wait() {
     _AFTER_COMMENT=false
 }
 
+# cat → bat with syntax highlighting, but pe shows "cat" to the audience.
+if command -v bat &>/dev/null; then
+    cat() { command bat --style=plain --paging=never "$@"; }
+fi
+
 # Override run_cmd: track exit code for prompt color.
 run_cmd() {
     trap '' SIGINT
