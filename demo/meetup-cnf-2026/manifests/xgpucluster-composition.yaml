@@ -1,0 +1,31 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xgpucluster-composition
+spec:
+  compositeTypeRef:
+    apiVersion: test.kausality.io/v1alpha1
+    kind: XGPUCluster
+  mode: Pipeline
+  pipeline:
+    - step: create-nopresource
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: gpu-nodes
+            base:
+              apiVersion: nop.crossplane.io/v1alpha1
+              kind: NopResource
+              spec:
+                forProvider:
+                  conditionAfter:
+                    - time: "3s"
+                      conditionType: Ready
+                      conditionStatus: "True"
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.gpu
+                toFieldPath: metadata.annotations[gpu-type]

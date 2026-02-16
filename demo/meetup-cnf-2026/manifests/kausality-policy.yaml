@@ -1,0 +1,11 @@
+apiVersion: kausality.io/v1alpha1
+kind: Kausality
+metadata:
+  name: crossplane-demo
+spec:
+  mode: enforce
+  resources:
+    - apiGroups: ["test.kausality.io"]
+      resources: ["xgpuclusters", "xinferenceclusters"]
+    - apiGroups: ["nop.crossplane.io"]
+      resources: ["nopresources"]

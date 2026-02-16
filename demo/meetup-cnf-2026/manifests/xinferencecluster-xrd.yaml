@@ -1,0 +1,31 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xinferenceclusters.test.kausality.io
+spec:
+  group: test.kausality.io
+  names:
+    kind: XInferenceCluster
+    plural: xinferenceclusters
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                nodePools:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      gpu:
+                        type: string
+                      replicas:
+                        type: integer
