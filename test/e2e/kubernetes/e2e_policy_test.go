@@ -336,8 +336,8 @@ func TestPolicyModeUpdate(t *testing.T) {
 	}, defaultTimeout, defaultInterval, "drift should be blocked in enforce mode")
 	t.Log("Drift blocked as expected (enforce mode)")
 
-	// Reset RS to 1 for next test
-	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	// Reset RS to 1 for next test (use DefaultBackoff — controller activity causes rapid conflicts)
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		rs, err := clientset.AppsV1().ReplicaSets(updateNS).Get(ctx, rsName, metav1.GetOptions{})
 		if err != nil {
 			return err

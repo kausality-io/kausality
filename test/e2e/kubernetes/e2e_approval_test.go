@@ -445,9 +445,22 @@ func TestRejectionOverridesApproval(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Added rejection annotation (approval still present)")
 
+	// Wait for Deployment to stabilize after annotation update.
+	// Adding the annotation bumps the Deployment's generation. Until the controller
+	// reconciles (gen == obsGen), any controller update to the RS is "expected
+	// reconciliation", not drift — so the rejection would never be checked.
+	ktesting.Eventually(t, func() (bool, string) {
+		dep, err = clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("error getting deployment: %v", err)
+		}
+		if dep.Status.ObservedGeneration != dep.Generation {
+			return false, fmt.Sprintf("not stable: gen=%d, obsGen=%d", dep.Generation, dep.Status.ObservedGeneration)
+		}
+		return true, "deployment stabilized after rejection annotation"
+	}, defaultTimeout, defaultInterval, "deployment should stabilize after adding rejection")
+
 	// Verify both annotations exist
-	dep, err = clientset.AppsV1().Deployments(enforceNS).Get(ctx, name, metav1.GetOptions{})
-	require.NoError(t, err)
 	assert.Contains(t, dep.Annotations, approval.ApprovalsAnnotation, "approval should still be present")
 	assert.Contains(t, dep.Annotations, approval.RejectionsAnnotation, "rejection should be present")
 
