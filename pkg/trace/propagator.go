@@ -102,33 +102,36 @@ func (p *Propagator) Propagate(ctx context.Context, obj client.Object, user stri
 // Origin conditions:
 // - No controller ownerReference
 // - Request is from a different actor (not the controller)
-// - Parent has generation == observedGeneration (not reconciling)
-// - Parent has no observedGeneration and user is not confirmed as controller
+// - Can't determine controller identity and parent is stable or has no observedGeneration
+//
+// Confirmed controllers always extend the parent's trace regardless of parent state.
+// Whether the controller's action is expected (reconciling) or drift (parent stable)
+// doesn't change the causal chain — the action is still caused by the parent.
 func (p *Propagator) isOrigin(parentState *drift.ParentState, username string, childUpdaters []string) bool {
 	if parentState == nil {
 		return true
 	}
 
-	// Check controller identity first
 	isController, canDetermine := drift.IsControllerByHash(parentState, username, childUpdaters)
+
+	// Different actor = always origin (new causal chain)
 	if canDetermine && !isController {
-		return true // different actor = always origin
+		return true
 	}
 
-	// If parent has observedGeneration, use it
-	if parentState.HasObservedGeneration {
-		if parentState.Generation == parentState.ObservedGeneration {
-			return true // parent stable = origin
-		}
-		return false // parent reconciling, user is/might be controller = extend
-	}
-
-	// No observedGeneration: can't determine reconciliation state.
-	// Only extend if user is confirmed as the controller.
+	// Confirmed controller = always extend parent's trace.
+	// The controller's action is causally linked to the parent regardless of parent state.
 	if canDetermine && isController {
-		return false // confirmed controller = extend
+		return false
 	}
-	return true // unknown = origin (safer default)
+
+	// Can't determine controller identity.
+	// If parent is reconciling, assume extend (likely controller).
+	if parentState.HasObservedGeneration && parentState.Generation != parentState.ObservedGeneration {
+		return false
+	}
+
+	return true // unknown actor, parent stable or no obsGen → origin (safer default)
 }
 
 // getParentTrace retrieves the trace from the parent object.

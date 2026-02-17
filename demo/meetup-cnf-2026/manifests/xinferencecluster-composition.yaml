@@ -1,0 +1,31 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xinferencecluster-composition
+spec:
+  compositeTypeRef:
+    apiVersion: test.kausality.io/v1alpha1
+    kind: XInferenceCluster
+  mode: Pipeline
+  pipeline:
+    - step: create-xgpucluster
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: gpu-cluster
+            base:
+              apiVersion: test.kausality.io/v1alpha1
+              kind: XGPUCluster
+              spec:
+                gpu: "b200"
+                replicas: 8
+            patches:
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.nodePools[0].gpu
+                toFieldPath: spec.gpu
+              - type: FromCompositeFieldPath
+                fromFieldPath: spec.nodePools[0].replicas
+                toFieldPath: spec.replicas

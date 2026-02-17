@@ -36,7 +36,8 @@ helm upgrade --install crossplane crossplane-stable/crossplane \
     --timeout "${TIMEOUT}"
 
 log "Waiting for Crossplane to be ready..."
-kubectl wait --for=condition=ready pod -l app=crossplane -n "${CROSSPLANE_NAMESPACE}" --timeout="${TIMEOUT}"
+kubectl rollout status deployment/crossplane -n "${CROSSPLANE_NAMESPACE}" --timeout="${TIMEOUT}"
+kubectl rollout status deployment/crossplane-rbac-manager -n "${CROSSPLANE_NAMESPACE}" --timeout="${TIMEOUT}"
 
 # Install provider-nop
 log "Installing provider-nop..."

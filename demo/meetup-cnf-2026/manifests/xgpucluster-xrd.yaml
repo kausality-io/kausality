@@ -1,0 +1,24 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xgpuclusters.test.kausality.io
+spec:
+  group: test.kausality.io
+  names:
+    kind: XGPUCluster
+    plural: xgpuclusters
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                gpu:
+                  type: string
+                replicas:
+                  type: integer

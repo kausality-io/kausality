@@ -32,7 +32,7 @@ func TestPropagator_isOrigin(t *testing.T) {
 
 		// === Has observedGeneration ===
 		{
-			name: "has obsGen + stable + is controller - origin",
+			name: "has obsGen + stable + is controller - extend (controller always extends)",
 			parentState: &drift.ParentState{
 				HasObservedGeneration: true,
 				Generation:            5,
@@ -41,7 +41,7 @@ func TestPropagator_isOrigin(t *testing.T) {
 			},
 			username:      controllerUser,
 			childUpdaters: []string{controllerHash},
-			wantOrigin:    true,
+			wantOrigin:    false,
 		},
 		{
 			name: "has obsGen + reconciling + is controller - extend",

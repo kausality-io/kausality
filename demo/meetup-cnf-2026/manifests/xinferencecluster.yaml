@@ -1,0 +1,11 @@
+apiVersion: test.kausality.io/v1alpha1
+kind: XInferenceCluster
+metadata:
+  name: llm-d-cluster
+  annotations:
+    kausality.io/trace-ticket: CNF-MEETUP-2026
+spec:
+  nodePools:
+    - name: training
+      gpu: "b200"
+      replicas: 8
